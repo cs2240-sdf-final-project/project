@@ -18,9 +18,11 @@ typedef struct {
     uint64_t s[1];
 } RandomState;
 
-void random_init(RandomState *state) {
+RandomState make_random() {
+    RandomState state;
     uint64_t s = UINT64_C(16018692385596851550);
-    state->s[0] = s;
+    state.s[0] = s;
+    return state;
 }
 
 // Returns a random float between 0 and 1.

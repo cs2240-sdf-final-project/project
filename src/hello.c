@@ -1,11 +1,15 @@
 // test.c
 
+#include <stdlib.h>
+#include <stdio.h>
 #include <stdio.h>
 #include <assert.h>
 #include "linmath.h"
 #include "sim_random.h"
 
-extern double __enzyme_autodiff(void*, double);
+int enzyme_dup;
+int enzyme_out;
+int enzyme_const;
 
 void dehomogenize(vec3 out, const vec4 in) {
     for (int i = 0; i < 3; i++) {
@@ -27,17 +31,21 @@ typedef struct {
     vec3 normal;
 } SdfResult;
 
-SdfResult sdf(const vec3 pos) {
+typedef struct {
+    float height;
+} SdfParameters;
+
+void sdf(const vec3 pos, float param, SdfResult *result) {
     vec3 origin;
     vec3_set(origin, 0.0);
+
+    origin[1] += param;
 
     vec3 displacement;
     vec3_sub(displacement, pos, origin);
 
-    SdfResult result;
-    result.distance = vec3_len(displacement);
-    vec3_norm(result.normal, displacement);
-    return result;
+    result->distance = vec3_len(displacement) - 2;
+    vec3_norm(result->normal, displacement);
 }
 
 void ray_step(vec3 origin, const vec3 direction, float t) {
@@ -55,11 +63,12 @@ void color_normal(vec3 radiance, const vec3 normal) {
     vec3_add(radiance, radiance, to_add);
 }
 
-void render_get_radiance(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction) {
+void render_get_radiance(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction, float param) {
     vec3_set(radiance, 0.0);
     for (int i = 0; i < 100; i++) {
-        SdfResult res = sdf(origin);
-        if (res.distance < 0.0) {
+        SdfResult res;
+        sdf(origin, param, &res);
+        if (res.distance < 1e-4) {
             color_normal(radiance, res.normal);
             break;
         }
@@ -67,6 +76,17 @@ void render_get_radiance(vec3 radiance, RandomState *rng, vec3 origin, const vec
     }
 }
 
+extern float __enzyme_autodiff(void*, int, vec3, int, RandomState *, int, vec3, int, const vec3, int, float);
+
+float render_get_gradient(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction) {
+    float param = 1.0;
+    return __enzyme_autodiff(render_get_radiance,
+        enzyme_const, radiance,
+        enzyme_const, rng,
+        enzyme_const, origin,
+        enzyme_const, direction,
+        enzyme_out, param);
+}
 
 typedef struct {
     long row_stride;
@@ -75,11 +95,35 @@ typedef struct {
 } Strides;
 
 typedef struct {
+    Strides strides;
     long image_width;
     long image_height;
-    float *image_out;
-    Strides strides;
+    long num_bytes;
+    char *image_out;
 } Image;
+
+Image make_image(long image_width, long image_height) {
+    Image image;
+    long num_bytes = image_width * image_height * 3;
+    char *image_out = malloc(num_bytes);
+    assert(image_out);
+    Strides strides;
+    strides.row_stride = image_width * 3;
+    strides.col_stride = 3;
+    strides.subpixel_stride = 1;
+    image.strides = strides;
+    image.image_width = image_width;
+    image.image_height = image_height;
+    image.image_out = image_out;
+    image.num_bytes = num_bytes;
+    return image;
+}
+
+void image_write_bpm(Image *image, FILE *f) {
+    fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
+    fwrite(image->image_out, 1, image->num_bytes, f);
+    fflush(f);
+}
 
 long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
@@ -92,15 +136,16 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     assert(ic < image->image_width);
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
-        image->image_out[index] = radiance[p];
+        char value = (char)(radiance[p] * 255.0);
+        image->image_out[index] = value;
     }
 }
 
 void render_image(Image *image, RandomState *rng) {
-    float aspect = image->image_height / image->image_width;
-    float near_clip = 0.1;
-    float far_clip = 100.0;
-    float y_fov = 1.0;
+    float aspect = (float)image->image_width / (float)image->image_height ;
+    float near_clip = 0.1f;
+    float far_clip = 100.0f;
+    float y_fov = 1.0f;
     vec3 camera_position = {-10.0, 0.0, 0.0};
     vec3 center = {0};
     vec3 up = {0.0, 1.0, 0.0};
@@ -122,8 +167,8 @@ void render_image(Image *image, RandomState *rng) {
             float r = (float)ir;
             float c = (float)ic;
 
-            float device_x = lerp(ic, 0.0, (float)image->image_width, -1.0, 1.0);
-            float device_y = lerp(ir, 0.0, (float)image->image_height, -1.0, 1.0);
+            float device_x = lerp(c, 0.0, (float)image->image_width, -1.0, 1.0);
+            float device_y = lerp(r, 0.0, (float)image->image_height, -1.0, 1.0);
 
             vec4 unprojected = {device_x, device_y, 1.0, 1.0};
             vec4 homo;
@@ -135,28 +180,40 @@ void render_image(Image *image, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
+            vec3 origin;
+            vec3_dup(origin, camera_position);
+
             vec3 radiance;
-            render_get_radiance(radiance, rng, camera_position, direction);
+            float height = 1.0;
+            float grad = render_get_gradient(radiance, rng, origin, direction);
+            vec3_set(radiance, grad);
             image_set(image, ir, ic, radiance);
         }
     }
 }
 
 
-double square(double x) {
-    vec3 foo = {1.0, 1.0, 1.0};
-    vec3 ret;
-    vec3_scale(ret, foo, x);
-    return vec3_len(ret);
+/*double square(double x) {*/
+/*    vec3 foo = {1.0, 1.0, 1.0};*/
+/*    vec3 ret;*/
+/*    vec3_scale(ret, foo, x);*/
+/*    return vec3_len(ret);*/
+/*}*/
+/**/
+/*double dsquare(double x) {*/
+/*    // This returns the derivative of square or 2 * x*/
+/*    return __enzyme_autodiff((void*) square, x);*/
+/*}*/
+
+int main(int argc, char *argv[]) {
+    long image_width = 500;
+    long image_height = 500;
+    Image image = make_image(image_width, image_height);
+    RandomState rng = make_random();
+    render_image(&image, &rng);
+    FILE *f = fopen("hello.bpm", "w");
+    image_write_bpm(&image, f);
 }
 
-double dsquare(double x) {
-    // This returns the derivative of square or 2 * x
-    return __enzyme_autodiff((void*) square, x);
-}
 
-int main() {
-    for(double i=1; i<5; i++)
-        printf("square(%f)=%f, dsquare(%f)=%f", i, square(i), i, dsquare(i));
-    return 0;
-}
+
