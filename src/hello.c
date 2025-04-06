@@ -12,6 +12,10 @@ int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
 
+float clamp(float x, float min, float max) {
+    return fmaxf(fminf(x, max), min);
+}
+
 void dehomogenize(vec3 out, const vec4 in) {
     for (int i = 0; i < 3; i++) {
         out[i] = in[i] / in[3];
@@ -61,32 +65,22 @@ void color_normal(vec3 radiance, const vec3 normal) {
 }
 
 void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, float param) {
+    vec3_set(radiance, 0.0);
     vec3 current_position;
     vec3_dup(current_position, origin);
-    vec3_set(radiance, 0.0);
-    float extension = 3e-1;
     for (int i = 0; i < 100; i++) {
         SdfResult res;
         sdf(current_position, param, &res);
-        if (res.distance > extension) {
-            ray_step(current_position, direction, res.distance);
+        if (res.distance < 1e-4f) {
+            vec3 color;
+            color_normal(color, res.normal);
+            vec3_dup(radiance, color);
+            break;
         } else {
-            float intersect_prob = lerp(res.distance, -extension, extension, 1.0, 0.0);
-            int should_intersect = random_next_float(rng) < intersect_prob;
-            if (should_intersect) {
-                vec3 color;
-                color_normal(color, res.normal);
-                vec3_scale(color, color, 1.f / intersect_prob);
-                vec3_dup(radiance, color);
-                break;
-            } else {
-                break;
-            }
+            ray_step(current_position, direction, res.distance);
         }
     }
 }
-
-/*extern void __enzyme_autodiff(void *, ...);*/
 
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, float, float);
 
@@ -111,10 +105,9 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
 }
 
 void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-/*    return render_get_gradient_helper(out_real, out_gradient, rng, origin, direction);*/
     vec3_set(out_real, 0.0);
     vec3_set(out_gradient, 0.0);
-    int count = 100;
+    int count = 1;
     for (int i = 0; i < count; i++) {
         vec3 real;
         vec3 gradient;
@@ -131,6 +124,10 @@ typedef struct {
     long col_stride;
     long subpixel_stride;
 } Strides;
+
+long get_index(Strides *s, long r, long c, long p) {
+    return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
+}
 
 typedef struct {
     Strides strides;
@@ -161,14 +158,6 @@ void image_write_bpm(Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
     fwrite(image->buf, 1, image->num_bytes, f);
     fflush(f);
-}
-
-long get_index(Strides *s, long r, long c, long p) {
-    return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
-}
-
-float clamp(float x, float min, float max) {
-    return fmaxf(fminf(x, max), min);
 }
 
 void image_set(Image *image, long ir, long ic, const vec3 radiance) {
@@ -204,11 +193,10 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
 
-    float z = 0.0f;
-    float h = 0.0f;
-
     for (long ir = 0; ir < real->image_height; ir++) {
-        printf("on row %ld\n", ir);
+        if (ir % 10 == 0) {
+            printf("on row %ld\n", ir);
+        }
         for (long ic = 0; ic < real->image_width; ic++) {
             float r = (float)ir;
             float c = (float)ic;
@@ -240,7 +228,6 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
 }
 
 int main(int argc, char *argv[]) {
-
     long image_width = 500;
     long image_height = 500;
     Image real = make_image(image_width, image_height);
