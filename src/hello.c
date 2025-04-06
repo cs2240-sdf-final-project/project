@@ -36,7 +36,7 @@ void sdf(const vec3 pos, float param, SdfResult *result) {
     vec3 origin;
     vec3_set(origin, 0.0);
 
-    origin[1] += param;
+    origin[2] += param;
 
     vec3 displacement;
     vec3_sub(displacement, pos, origin);
@@ -99,11 +99,8 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
     vec3 d_radiance;
     vec3_set(d_radiance, 1.0);
 
-    float *rad = radiance;
-    float *drad = d_radiance;
-
     __enzyme_fwddiff_radiance((void*)render_get_radiance,
-        enzyme_dup, rad, drad,
+        enzyme_dup, radiance, d_radiance,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
@@ -114,9 +111,10 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
 }
 
 void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
+/*    return render_get_gradient_helper(out_real, out_gradient, rng, origin, direction);*/
     vec3_set(out_real, 0.0);
     vec3_set(out_gradient, 0.0);
-    int count = 50;
+    int count = 100;
     for (int i = 0; i < count; i++) {
         vec3 real;
         vec3 gradient;
@@ -169,6 +167,10 @@ long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
 }
 
+float clamp(float x, float min, float max) {
+    return fmaxf(fminf(x, max), min);
+}
+
 void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     assert(ir >= 0);
     assert(ir < image->image_height);
@@ -176,7 +178,7 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     assert(ic < image->image_width);
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
-        char value = (char)(radiance[p] * 255.0);
+        char value = (char)clamp(radiance[p] * 255.0, 0.0, 255.0);
         image->buf[index] = value;
     }
 }
@@ -202,6 +204,9 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
 
+    float z = 0.0f;
+    float h = 0.0f;
+
     for (long ir = 0; ir < real->image_height; ir++) {
         printf("on row %ld\n", ir);
         for (long ic = 0; ic < real->image_width; ic++) {
@@ -224,34 +229,17 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
             vec3 out_real;
             vec3 out_gradient;
             render_get_gradient_wrapper(out_real, out_gradient, rng, camera_position, direction);
+
             image_set(real, ir, ic, out_real);
+            vec3_scale(out_gradient, out_gradient, 0.5);
+            vec3 half = {0.5, 0.5, 0.5};
+            vec3_add(out_gradient, out_gradient, half);
             image_set(gradient, ir, ic, out_gradient);
         }
     }
 }
 
-/*struct double2 {*/
-/*    double x, y;*/
-/*};*/
-/**/
-/*void f(float *out, double x) { */
-/*    out[0] = 2.0 * x;*/
-/*    out[1] = 3.0 * x;*/
-/*    out[2] = 4.0 * x;*/
-/*}*/
-/**/
-/*extern void __enzyme_fwddiff(void *, ...);*/
-/*extern struct double2 __enzyme_autodiff_double(void *, ...);*/
-
 int main(int argc, char *argv[]) {
-
-/*    vec3 outs = { 0.0, 0.0, 0.0 };*/
-/*    vec3 d_outs = { 1.0, 1.0, 1.0 };*/
-/*    double x = 5.0;*/
-/*    double dx = 1.0;*/
-/*    */
-/*    __enzyme_fwddiff((void*)f, enzyme_dup, &outs, &d_outs, enzyme_dup, x, dx); */
-/*    printf("%g %g %g", d_outs[0], d_outs[1], d_outs[2]);*/
 
     long image_width = 500;
     long image_height = 500;

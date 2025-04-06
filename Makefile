@@ -1,4 +1,4 @@
-FLAGS=-O2 -g -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -Wconversion -Wsign-conversion -Wfloat-conversion
+FLAGS=-Ofast -g -Wconversion -Wsign-conversion -Wfloat-conversion
 
 build/a.exe: build/output.ll
 	clang-16 $< $(FLAGS) -lm -o $@
