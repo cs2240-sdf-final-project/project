@@ -8,6 +8,7 @@
 #include "sim_random.h"
 
 int enzyme_dup;
+int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
 
@@ -63,7 +64,6 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
     vec3 current_position;
     vec3_dup(current_position, origin);
     vec3_set(radiance, 0.0);
-/*    printf("hello world\n");*/
     float extension = 3e-1;
     for (int i = 0; i < 100; i++) {
         SdfResult res;
@@ -92,18 +92,35 @@ float render_get_radiance_helper(RandomState *rng, const vec3 origin, const vec3
     return out[which];
 }
 
+void render_get_radiance_helper_wrapped(float *out, RandomState *rng, const vec3 origin, const vec3 direction, float *param, int which) {
+    *out = render_get_radiance_helper(rng, origin, direction, param, which);
+}
+
 extern void __enzyme_autodiff(void *, ...);
 
 float render_get_gradient_helper(RandomState *rng, const vec3 origin, const vec3 direction, int which) {
-    float param = 1.0;
+    float param = 0.1;
     float d_param = 1.0;
-/*    return render_get_radiance_helper(rng, origin, direction, param, which);*/
-    __enzyme_autodiff(render_get_radiance_helper,
-        enzyme_const, rng,
-        enzyme_const, origin,
-        enzyme_const, direction,
-        enzyme_dup, &param, &d_param,
-        enzyme_const, which);
+/*    return render_get_radiance_helper(rng, origin, direction, &param, which);*/
+/**/
+/*    __enzyme_autodiff(render_get_radiance_helper,*/
+/*        enzyme_const, rng,*/
+/*        enzyme_const, origin,*/
+/*        enzyme_const, direction,*/
+/*        enzyme_dup, &param, &d_param,*/
+/*        enzyme_const, which);*/
+
+
+    float out = 0.0;
+    float d_out = 1.0;
+
+    __enzyme_autodiff((void*)render_get_radiance_helper_wrapped,
+        enzyme_dupnoneed, &out, &d_out,
+        enzyme_const,     rng,
+        enzyme_const,     origin,
+        enzyme_const,     direction,
+        enzyme_dup,       &param, &d_param,
+        enzyme_const,     which);
 
     return param;
 }
@@ -220,14 +237,36 @@ void render_image(Image *image, RandomState *rng) {
     }
 }
 
+struct double2 {
+    double x, y;
+};
+
+void f(float *out, double x) { 
+    out[0] = 2.0 * x;
+    out[1] = 3.0 * x;
+    out[2] = 4.0 * x;
+}
+
+extern void __enzyme_fwddiff(void *, ...);
+extern struct double2 __enzyme_autodiff_double(void *, ...);
+
 int main(int argc, char *argv[]) {
-    long image_width = 500;
-    long image_height = 500;
-    Image image = make_image(image_width, image_height);
-    RandomState rng = make_random();
-    render_image(&image, &rng);
-    FILE *f = fopen("hello.bpm", "w");
-    image_write_bpm(&image, f);
+
+    vec3 outs = { 0.0, 0.0, 0.0 };
+    vec3 d_outs = { 1.0, 1.0, 1.0 };
+    double x = 5.0;
+    double dx = 1.0;
+    
+    __enzyme_fwddiff((void*)f, enzyme_dup, &outs, &d_outs, enzyme_dup, x, dx); 
+    printf("%g %g %g", d_outs[0], d_outs[1], d_outs[2]);
+
+/*    long image_width = 500;*/
+/*    long image_height = 500;*/
+/*    Image image = make_image(image_width, image_height);*/
+/*    RandomState rng = make_random();*/
+/*    render_image(&image, &rng);*/
+/*    FILE *f = fopen("hello.bpm", "w");*/
+/*    image_write_bpm(&image, f);*/
 }
 
 
