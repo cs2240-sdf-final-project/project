@@ -31,10 +31,6 @@ typedef struct {
     vec3 normal;
 } SdfResult;
 
-typedef struct {
-    float height;
-} SdfParameters;
-
 void sdf(const vec3 pos, float *param, SdfResult *result) {
     vec3 origin;
     vec3_set(origin, 0.0);
@@ -63,13 +59,17 @@ void color_normal(vec3 radiance, const vec3 normal) {
     vec3_add(radiance, radiance, to_add);
 }
 
-void render_get_radiance(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction, float *param) {
+void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, float *param) {
+    vec3 current_position;
+    vec3_dup(current_position, origin);
+    vec3_set(radiance, 0.0);
+/*    printf("hello world\n");*/
     float extension = 3e-1;
     for (int i = 0; i < 100; i++) {
         SdfResult res;
-        sdf(origin, param, &res);
+        sdf(current_position, param, &res);
         if (res.distance > extension) {
-            ray_step(origin, direction, res.distance);
+            ray_step(current_position, direction, res.distance);
         } else {
             float intersect_prob = lerp(res.distance, -extension, extension, 1.0, 0.0);
             int should_intersect = random_next_float(rng) < intersect_prob;
@@ -86,38 +86,35 @@ void render_get_radiance(vec3 radiance, RandomState *rng, vec3 origin, const vec
     }
 }
 
-extern float __enzyme_autodiff(void *, ...);
+float render_get_radiance_helper(RandomState *rng, const vec3 origin, const vec3 direction, float *param, int which) {
+    vec3 out;
+    render_get_radiance(out, rng, origin, direction, param);
+    return out[which];
+}
 
-void render_get_gradient(vec3 out, RandomState *rng, vec3 origin, const vec3 direction) {
+extern void __enzyme_autodiff(void *, ...);
+
+float render_get_gradient_helper(RandomState *rng, const vec3 origin, const vec3 direction, int which) {
     float param = 1.0;
     float d_param = 1.0;
-    vec3 radiance;
-    vec3_set(radiance, 0.0);
-    vec3 d_radiance = {1.0, 1.0, 1.0};
-    float *rad = radiance;
-    float *d_rad = d_radiance;
-    __enzyme_autodiff(render_get_radiance,
-        enzyme_dup, rad, d_rad,
+/*    return render_get_radiance_helper(rng, origin, direction, param, which);*/
+    __enzyme_autodiff(render_get_radiance_helper,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_dup, &param, &d_param);
-    vec3_dup(out, d_radiance);
+        enzyme_dup, &param, &d_param,
+        enzyme_const, which);
+
+    return param;
 }
 
-/*void render_get_gradient(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction) {*/
-/*    float param = 1.0;*/
-/*    render_get_radiance(radiance, rng, origin, direction, &param);*/
-/*}*/
-
-void render_get_gradient_wrapper(vec3 out, RandomState *rng, vec3 origin, const vec3 direction) {
-    int count = 20;
+void render_get_gradient_wrapper(vec3 out, RandomState *rng, const vec3 origin, const vec3 direction) {
+    int count = 2;
     for (int i = 0; i < count; i++) {
         vec3 radiance;
-        vec3_set(radiance, 0.0);
-        vec3 camera_position;
-        vec3_dup(camera_position, origin);
-        render_get_gradient(radiance, rng, origin, direction);
+        radiance[0] = render_get_gradient_helper(rng, origin, direction, 0);
+        radiance[1] = render_get_gradient_helper(rng, origin, direction, 1);
+        radiance[2] = render_get_gradient_helper(rng, origin, direction, 2);
         vec3_add(out, out, radiance);
     }
     vec3_scale(out, out, 1.f / (float)count);
@@ -216,16 +213,8 @@ void render_image(Image *image, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
-            vec3 origin;
-            vec3_dup(origin, camera_position);
-
             vec3 radiance;
-
-/*            float height = 1.0;*/
-/*            render_get_radiance(radiance, rng, origin, direction, &height);*/
-
-            float height = 1.0;
-            render_get_gradient_wrapper(radiance, rng, origin, direction);
+            render_get_gradient_wrapper(radiance, rng, camera_position, direction);
             image_set(image, ir, ic, radiance);
         }
     }
