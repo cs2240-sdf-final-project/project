@@ -35,16 +35,16 @@ typedef struct {
     float height;
 } SdfParameters;
 
-void sdf(const vec3 pos, float param, SdfResult *result) {
+void sdf(const vec3 pos, float *param, SdfResult *result) {
     vec3 origin;
     vec3_set(origin, 0.0);
 
-    origin[1] += param;
+    origin[1] += *param;
 
     vec3 displacement;
     vec3_sub(displacement, pos, origin);
 
-    result->distance = vec3_len(displacement) - 2;
+    result->distance = vec3_len(displacement) - 3.5;
     vec3_norm(result->normal, displacement);
 }
 
@@ -63,29 +63,64 @@ void color_normal(vec3 radiance, const vec3 normal) {
     vec3_add(radiance, radiance, to_add);
 }
 
-void render_get_radiance(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction, float param) {
-    vec3_set(radiance, 0.0);
+void render_get_radiance(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction, float *param) {
+    float extension = 3e-1;
     for (int i = 0; i < 100; i++) {
         SdfResult res;
         sdf(origin, param, &res);
-        if (res.distance < 1e-4) {
-            color_normal(radiance, res.normal);
-            break;
+        if (res.distance > extension) {
+            ray_step(origin, direction, res.distance);
+        } else {
+            float intersect_prob = lerp(res.distance, -extension, extension, 1.0, 0.0);
+            int should_intersect = random_next_float(rng) < intersect_prob;
+            if (should_intersect) {
+                vec3 color;
+                color_normal(color, res.normal);
+                vec3_scale(color, color, 1.f / intersect_prob);
+                vec3_dup(radiance, color);
+                break;
+            } else {
+                break;
+            }
         }
-        ray_step(origin, direction, res.distance);
     }
 }
 
-extern float __enzyme_autodiff(void*, int, vec3, int, RandomState *, int, vec3, int, const vec3, int, float);
+extern float __enzyme_autodiff(void *, ...);
 
-float render_get_gradient(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction) {
+void render_get_gradient(vec3 out, RandomState *rng, vec3 origin, const vec3 direction) {
     float param = 1.0;
-    return __enzyme_autodiff(render_get_radiance,
-        enzyme_const, radiance,
+    float d_param = 1.0;
+    vec3 radiance;
+    vec3_set(radiance, 0.0);
+    vec3 d_radiance = {1.0, 1.0, 1.0};
+    float *rad = radiance;
+    float *d_rad = d_radiance;
+    __enzyme_autodiff(render_get_radiance,
+        enzyme_dup, rad, d_rad,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_out, param);
+        enzyme_dup, &param, &d_param);
+    vec3_dup(out, d_radiance);
+}
+
+/*void render_get_gradient(vec3 radiance, RandomState *rng, vec3 origin, const vec3 direction) {*/
+/*    float param = 1.0;*/
+/*    render_get_radiance(radiance, rng, origin, direction, &param);*/
+/*}*/
+
+void render_get_gradient_wrapper(vec3 out, RandomState *rng, vec3 origin, const vec3 direction) {
+    int count = 20;
+    for (int i = 0; i < count; i++) {
+        vec3 radiance;
+        vec3_set(radiance, 0.0);
+        vec3 camera_position;
+        vec3_dup(camera_position, origin);
+        render_get_gradient(radiance, rng, origin, direction);
+        vec3_add(out, out, radiance);
+    }
+    vec3_scale(out, out, 1.f / (float)count);
 }
 
 typedef struct {
@@ -99,14 +134,14 @@ typedef struct {
     long image_width;
     long image_height;
     long num_bytes;
-    char *image_out;
+    char *buf;
 } Image;
 
 Image make_image(long image_width, long image_height) {
     Image image;
     long num_bytes = image_width * image_height * 3;
-    char *image_out = malloc(num_bytes);
-    assert(image_out);
+    char *buf = malloc(num_bytes);
+    assert(buf);
     Strides strides;
     strides.row_stride = image_width * 3;
     strides.col_stride = 3;
@@ -114,14 +149,14 @@ Image make_image(long image_width, long image_height) {
     image.strides = strides;
     image.image_width = image_width;
     image.image_height = image_height;
-    image.image_out = image_out;
+    image.buf = buf;
     image.num_bytes = num_bytes;
     return image;
 }
 
 void image_write_bpm(Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
-    fwrite(image->image_out, 1, image->num_bytes, f);
+    fwrite(image->buf, 1, image->num_bytes, f);
     fflush(f);
 }
 
@@ -137,7 +172,7 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
         char value = (char)(radiance[p] * 255.0);
-        image->image_out[index] = value;
+        image->buf[index] = value;
     }
 }
 
@@ -163,6 +198,7 @@ void render_image(Image *image, RandomState *rng) {
     mat4x4_invert(world_from_camera, projection_view);
 
     for (long ir = 0; ir < image->image_height; ir++) {
+        printf("on row %ld\n", ir);
         for (long ic = 0; ic < image->image_width; ic++) {
             float r = (float)ir;
             float c = (float)ic;
@@ -184,26 +220,16 @@ void render_image(Image *image, RandomState *rng) {
             vec3_dup(origin, camera_position);
 
             vec3 radiance;
+
+/*            float height = 1.0;*/
+/*            render_get_radiance(radiance, rng, origin, direction, &height);*/
+
             float height = 1.0;
-            float grad = render_get_gradient(radiance, rng, origin, direction);
-            vec3_set(radiance, grad);
+            render_get_gradient_wrapper(radiance, rng, origin, direction);
             image_set(image, ir, ic, radiance);
         }
     }
 }
-
-
-/*double square(double x) {*/
-/*    vec3 foo = {1.0, 1.0, 1.0};*/
-/*    vec3 ret;*/
-/*    vec3_scale(ret, foo, x);*/
-/*    return vec3_len(ret);*/
-/*}*/
-/**/
-/*double dsquare(double x) {*/
-/*    // This returns the derivative of square or 2 * x*/
-/*    return __enzyme_autodiff((void*) square, x);*/
-/*}*/
 
 int main(int argc, char *argv[]) {
     long image_width = 500;
