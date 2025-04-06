@@ -32,11 +32,11 @@ typedef struct {
     vec3 normal;
 } SdfResult;
 
-void sdf(const vec3 pos, float *param, SdfResult *result) {
+void sdf(const vec3 pos, float param, SdfResult *result) {
     vec3 origin;
     vec3_set(origin, 0.0);
 
-    origin[1] += *param;
+    origin[1] += param;
 
     vec3 displacement;
     vec3_sub(displacement, pos, origin);
@@ -60,7 +60,7 @@ void color_normal(vec3 radiance, const vec3 normal) {
     vec3_add(radiance, radiance, to_add);
 }
 
-void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, float *param) {
+void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, float param) {
     vec3 current_position;
     vec3_dup(current_position, origin);
     vec3_set(radiance, 0.0);
@@ -86,55 +86,46 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
     }
 }
 
-float render_get_radiance_helper(RandomState *rng, const vec3 origin, const vec3 direction, float *param, int which) {
-    vec3 out;
-    render_get_radiance(out, rng, origin, direction, param);
-    return out[which];
-}
+/*extern void __enzyme_autodiff(void *, ...);*/
 
-void render_get_radiance_helper_wrapped(float *out, RandomState *rng, const vec3 origin, const vec3 direction, float *param, int which) {
-    *out = render_get_radiance_helper(rng, origin, direction, param, which);
-}
+extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, float, float);
 
-extern void __enzyme_autodiff(void *, ...);
-
-float render_get_gradient_helper(RandomState *rng, const vec3 origin, const vec3 direction, int which) {
+void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
     float param = 0.1;
     float d_param = 1.0;
-/*    return render_get_radiance_helper(rng, origin, direction, &param, which);*/
-/**/
-/*    __enzyme_autodiff(render_get_radiance_helper,*/
-/*        enzyme_const, rng,*/
-/*        enzyme_const, origin,*/
-/*        enzyme_const, direction,*/
-/*        enzyme_dup, &param, &d_param,*/
-/*        enzyme_const, which);*/
 
+    vec3 radiance;
+    vec3_set(radiance, 1.0);
+    vec3 d_radiance;
+    vec3_set(d_radiance, 1.0);
 
-    float out = 0.0;
-    float d_out = 1.0;
+    float *rad = radiance;
+    float *drad = d_radiance;
 
-    __enzyme_autodiff((void*)render_get_radiance_helper_wrapped,
-        enzyme_dupnoneed, &out, &d_out,
-        enzyme_const,     rng,
-        enzyme_const,     origin,
-        enzyme_const,     direction,
-        enzyme_dup,       &param, &d_param,
-        enzyme_const,     which);
+    __enzyme_fwddiff_radiance((void*)render_get_radiance,
+        enzyme_dup, rad, drad,
+        enzyme_const, rng,
+        enzyme_const, origin,
+        enzyme_const, direction,
+        enzyme_dup, param, d_param);
 
-    return param;
+    vec3_dup(real, radiance);
+    vec3_dup(gradient, d_radiance);
 }
 
-void render_get_gradient_wrapper(vec3 out, RandomState *rng, const vec3 origin, const vec3 direction) {
-    int count = 2;
+void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
+    vec3_set(out_real, 0.0);
+    vec3_set(out_gradient, 0.0);
+    int count = 50;
     for (int i = 0; i < count; i++) {
-        vec3 radiance;
-        radiance[0] = render_get_gradient_helper(rng, origin, direction, 0);
-        radiance[1] = render_get_gradient_helper(rng, origin, direction, 1);
-        radiance[2] = render_get_gradient_helper(rng, origin, direction, 2);
-        vec3_add(out, out, radiance);
+        vec3 real;
+        vec3 gradient;
+        render_get_gradient_helper(real, gradient, rng, origin, direction);
+        vec3_add(out_real, out_real, real);
+        vec3_add(out_gradient, out_gradient, gradient);
     }
-    vec3_scale(out, out, 1.f / (float)count);
+    vec3_scale(out_real, out_real, 1.f / (float)count);
+    vec3_scale(out_gradient, out_gradient, 1.f / (float)count);
 }
 
 typedef struct {
@@ -190,8 +181,8 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     }
 }
 
-void render_image(Image *image, RandomState *rng) {
-    float aspect = (float)image->image_width / (float)image->image_height ;
+void render_image(Image *real, Image *gradient, RandomState *rng) {
+    float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
     float y_fov = 1.0f;
@@ -211,14 +202,14 @@ void render_image(Image *image, RandomState *rng) {
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
 
-    for (long ir = 0; ir < image->image_height; ir++) {
+    for (long ir = 0; ir < real->image_height; ir++) {
         printf("on row %ld\n", ir);
-        for (long ic = 0; ic < image->image_width; ic++) {
+        for (long ic = 0; ic < real->image_width; ic++) {
             float r = (float)ir;
             float c = (float)ic;
 
-            float device_x = lerp(c, 0.0, (float)image->image_width, -1.0, 1.0);
-            float device_y = lerp(r, 0.0, (float)image->image_height, -1.0, 1.0);
+            float device_x = lerp(c, 0.0, (float)real->image_width, -1.0, 1.0);
+            float device_y = lerp(r, 0.0, (float)real->image_height, -1.0, 1.0);
 
             vec4 unprojected = {device_x, device_y, 1.0, 1.0};
             vec4 homo;
@@ -230,43 +221,48 @@ void render_image(Image *image, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
-            vec3 radiance;
-            render_get_gradient_wrapper(radiance, rng, camera_position, direction);
-            image_set(image, ir, ic, radiance);
+            vec3 out_real;
+            vec3 out_gradient;
+            render_get_gradient_wrapper(out_real, out_gradient, rng, camera_position, direction);
+            image_set(real, ir, ic, out_real);
+            image_set(gradient, ir, ic, out_gradient);
         }
     }
 }
 
-struct double2 {
-    double x, y;
-};
-
-void f(float *out, double x) { 
-    out[0] = 2.0 * x;
-    out[1] = 3.0 * x;
-    out[2] = 4.0 * x;
-}
-
-extern void __enzyme_fwddiff(void *, ...);
-extern struct double2 __enzyme_autodiff_double(void *, ...);
+/*struct double2 {*/
+/*    double x, y;*/
+/*};*/
+/**/
+/*void f(float *out, double x) { */
+/*    out[0] = 2.0 * x;*/
+/*    out[1] = 3.0 * x;*/
+/*    out[2] = 4.0 * x;*/
+/*}*/
+/**/
+/*extern void __enzyme_fwddiff(void *, ...);*/
+/*extern struct double2 __enzyme_autodiff_double(void *, ...);*/
 
 int main(int argc, char *argv[]) {
 
-    vec3 outs = { 0.0, 0.0, 0.0 };
-    vec3 d_outs = { 1.0, 1.0, 1.0 };
-    double x = 5.0;
-    double dx = 1.0;
-    
-    __enzyme_fwddiff((void*)f, enzyme_dup, &outs, &d_outs, enzyme_dup, x, dx); 
-    printf("%g %g %g", d_outs[0], d_outs[1], d_outs[2]);
+/*    vec3 outs = { 0.0, 0.0, 0.0 };*/
+/*    vec3 d_outs = { 1.0, 1.0, 1.0 };*/
+/*    double x = 5.0;*/
+/*    double dx = 1.0;*/
+/*    */
+/*    __enzyme_fwddiff((void*)f, enzyme_dup, &outs, &d_outs, enzyme_dup, x, dx); */
+/*    printf("%g %g %g", d_outs[0], d_outs[1], d_outs[2]);*/
 
-/*    long image_width = 500;*/
-/*    long image_height = 500;*/
-/*    Image image = make_image(image_width, image_height);*/
-/*    RandomState rng = make_random();*/
-/*    render_image(&image, &rng);*/
-/*    FILE *f = fopen("hello.bpm", "w");*/
-/*    image_write_bpm(&image, f);*/
+    long image_width = 500;
+    long image_height = 500;
+    Image real = make_image(image_width, image_height);
+    Image gradient = make_image(image_width, image_height);
+    RandomState rng = make_random();
+    render_image(&real, &gradient, &rng);
+    FILE *freal = fopen("real.bpm", "w");
+    FILE *fgradient = fopen("gradient.bpm", "w");
+    image_write_bpm(&real, freal);
+    image_write_bpm(&gradient, fgradient);
 }
 
 
