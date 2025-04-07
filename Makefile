@@ -4,7 +4,7 @@ FLAGS=-O3 -g -Wall -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion
 build/a.exe: build/output.ll
 	clang-16 $< $(FLAGS) -lm -o $@
 
-build/input.ll: src/hello.c
+build/input.ll: src/hello.cpp
 	clang-16 $< -S -emit-llvm -o $@ $(FLAGS) 
 
 build/output.ll: build/input.ll

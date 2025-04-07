@@ -140,7 +140,7 @@ Image make_image(long image_width, long image_height) {
     Image image;
     long num_bytes = image_width * image_height * 3;
     assert(num_bytes > 0);
-    char *buf = malloc((size_t)num_bytes);
+    char *buf = (char*)malloc((size_t)num_bytes);
     assert(buf);
     Strides strides;
     strides.row_stride = image_width * 3;
@@ -246,6 +246,4 @@ int main(int argc, char *argv[]) {
     free_image(&real);
     free_image(&gradient);
 }
-
-
 
