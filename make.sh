@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -eu
+
 docker build -t cs2240-final-build -f - . <<EOF
 FROM debian:bookworm-slim
 
@@ -12,6 +14,7 @@ RUN git clone https://github.com/EnzymeAD/Enzyme
 WORKDIR /usr/local/src/Enzyme
 
 RUN git checkout v0.0.173 && mkdir -p /usr/local/src/Enzyme/enzyme/build && cd /usr/local/src/Enzyme/enzyme/build && cmake -G Ninja .. -DLLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm -DLLVM_EXTERNAL_LIT=/usr/lib/llvm-16/build/utils/lit/lit.py && ninja
+
 EOF
 
 cont=$(docker run -d --name cs2240-final-builder -v$(pwd):/usr/local/src/project cs2240-final-build sleep infinity)

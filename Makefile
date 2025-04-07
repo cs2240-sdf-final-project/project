@@ -1,6 +1,11 @@
 LLVM_ENZYME=/usr/local/src/Enzyme/enzyme/build/Enzyme/LLVMEnzyme-16.so
 FLAGS=-O3 -g -Wall -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion
 
+build: build/a.exe
+
+run: build/a.exe
+	build/a.exe
+
 build/a.exe: build/output.ll
 	clang-16 $< $(FLAGS) -lm -o $@
 
