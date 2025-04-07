@@ -18,3 +18,7 @@ Enzyme is a tool that autodiffs existing C code. The two most helpful pages in t
 
 * <https://enzyme.mit.edu/getting_started/CallingConvention/>
 * <https://enzyme.mit.edu/getting_started/Examples/>
+
+Since we will be working with SDFs, Inigo Quilezles blog will be very helpful. There is a [page](https://iquilezles.org/articles/distfunctions/) that specifies SDFs for many 3d shapes, along with the operations needed to compose them to form more complex scenes.
+
+I have also referenced Chris Wellons blog <https://nullprogram.com> in some places where we have used his subroutines.

@@ -158,6 +158,7 @@ void free_image(Image *image) {
     free(image->buf);
 }
 
+// https://nullprogram.com/blog/2017/11/03/
 void image_write_bpm(Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
     assert(image->num_bytes > 0);
