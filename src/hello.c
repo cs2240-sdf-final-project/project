@@ -1,5 +1,3 @@
-// test.c
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdio.h>
@@ -45,7 +43,7 @@ void sdf(const vec3 pos, float param, SdfResult *result) {
     vec3 displacement;
     vec3_sub(displacement, pos, origin);
 
-    result->distance = vec3_len(displacement) - 3.5;
+    result->distance = vec3_len(displacement) - 3.5f;
     vec3_norm(result->normal, displacement);
 }
 
@@ -85,15 +83,16 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, float, float);
 
 void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    float param = 0.1;
-    float d_param = 1.0;
+    float param = 0.1f;
+    float d_param = 1.0f;
 
     vec3 radiance;
-    vec3_set(radiance, 1.0);
+    vec3_set(radiance, 1.f);
     vec3 d_radiance;
-    vec3_set(d_radiance, 1.0);
+    vec3_set(d_radiance, 1.f);
 
-    __enzyme_fwddiff_radiance((void*)render_get_radiance,
+    __enzyme_fwddiff_radiance(
+        (void*)render_get_radiance,
         enzyme_dup, radiance, d_radiance,
         enzyme_const, rng,
         enzyme_const, origin,
@@ -105,8 +104,8 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
 }
 
 void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    vec3_set(out_real, 0.0);
-    vec3_set(out_gradient, 0.0);
+    vec3_set(out_real, 0.f);
+    vec3_set(out_gradient, 0.f);
     int count = 1;
     for (int i = 0; i < count; i++) {
         vec3 real;
@@ -140,7 +139,8 @@ typedef struct {
 Image make_image(long image_width, long image_height) {
     Image image;
     long num_bytes = image_width * image_height * 3;
-    char *buf = malloc(num_bytes);
+    assert(num_bytes > 0);
+    char *buf = malloc((size_t)num_bytes);
     assert(buf);
     Strides strides;
     strides.row_stride = image_width * 3;
@@ -154,9 +154,14 @@ Image make_image(long image_width, long image_height) {
     return image;
 }
 
+void free_image(Image *image) {
+    free(image->buf);
+}
+
 void image_write_bpm(Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
-    fwrite(image->buf, 1, image->num_bytes, f);
+    assert(image->num_bytes > 0);
+    fwrite(image->buf, 1, (size_t)image->num_bytes, f);
     fflush(f);
 }
 
@@ -167,7 +172,7 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     assert(ic < image->image_width);
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
-        char value = (char)clamp(radiance[p] * 255.0, 0.0, 255.0);
+        char value = (char)clamp(radiance[p] * 255.f, 0.f, 255.f);
         image->buf[index] = value;
     }
 }
@@ -194,7 +199,7 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
     mat4x4_invert(world_from_camera, projection_view);
 
     for (long ir = 0; ir < real->image_height; ir++) {
-        if (ir % 10 == 0) {
+        if (ir % 50 == 0) {
             printf("on row %ld\n", ir);
         }
         for (long ic = 0; ic < real->image_width; ic++) {
@@ -238,6 +243,8 @@ int main(int argc, char *argv[]) {
     FILE *fgradient = fopen("gradient.bpm", "w");
     image_write_bpm(&real, freal);
     image_write_bpm(&gradient, fgradient);
+    free_image(&real);
+    free_image(&gradient);
 }
 
 
