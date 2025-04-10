@@ -5,6 +5,8 @@ build: build/a.exe
 
 run: build/a.exe
 	build/a.exe
+	convert real.bpm real.png
+	convert gradient.bpm gradient.png
 
 build/a.exe: build/output.ll
 	clang-16 $< $(FLAGS) -lm -o $@
