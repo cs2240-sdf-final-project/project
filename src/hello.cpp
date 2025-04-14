@@ -15,6 +15,34 @@ float lerp(float x, float in_min, float in_max, float out_min, float out_max) {
     return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min);
 }
 
+float directional_derivative_inner(const vec3 pos, const vec3 direction, float t, const SceneParams *params) {
+    vec3 scaled;
+    vec3_scale(scaled, direction, t);
+    vec3 added;
+    vec3_add(added, pos, scaled);
+
+    SceneSample sample;
+    scene_sample(added, params, &sample);
+    return sample.distance;
+}
+
+extern float __enzyme_fwddiff_directional(void *,
+    int, const float *,
+    int, const float *,
+    int, float, float,
+    int, const SceneParams *);
+
+float directional_derivative(const vec3 pos, const vec3 direction, const SceneParams *params) {
+    float t = 0.0f;
+    float dt = 1.0f;
+    return __enzyme_fwddiff_directional(
+        (void *)directional_derivative_inner,
+        enzyme_const, pos,
+        enzyme_const, direction,
+        enzyme_dup, t, dt,
+        enzyme_const, params);
+}
+
 float sdf_normal_wrapper(const vec3 pos, const float *params) {
     SceneParams scene_params;
     params_from_float_pointer(params, &scene_params);
@@ -86,7 +114,6 @@ void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const Scen
             radiance[i] += kd * facing * sample->diffuse[i] * lightColor[i];
             radiance[i] += ks * specular * sample->specular[i] * lightColor[i];
         }
-
     }
 }
 
@@ -119,7 +146,6 @@ void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 ori
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
 
 void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    // float param = 0.1f;
     SceneParams params;
     params.offset = 0.1f;
     const float *raw_params = float_pointer_from_params(&params);
@@ -136,7 +162,7 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_dup, raw_params, &d_param);
+        enzyme_dupnoneed, raw_params, &d_param);
 
     vec3_dup(real, radiance);
     vec3_dup(gradient, d_radiance);
