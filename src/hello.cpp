@@ -52,7 +52,7 @@ void color_normal(vec3 radiance, const vec3 normal) {
     vec3_add(radiance, radiance, to_add);
 }
 
-void phongLight(vec3 radiance, const vec3 normal) {
+void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SceneSample *sample) {
     float lightColors[3][3] = {
         {1.0f, 0.0f, 0.0f},
         {0.0f, 1.0f, 0.0f},
@@ -66,21 +66,27 @@ void phongLight(vec3 radiance, const vec3 normal) {
     };
 
     float kd = 0.5;
+    float ks = 1.0;
 
-    // diffuse color of the object
-    vec3 cDiffuse = {0.5f, 0.3f, 0.9f};
-
-    vec3_set(radiance, 0.f);
+    vec3_dup(radiance, sample->ambient);
     for (int l = 0; l < 3; l++) {
         vec3 lightColor;
         vec3_dup(lightColor, lightColors[l]);
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
 
-        float diffuse = clamp(fmaxf(vec3_mul_inner(light_dir, normal), 0.0f), 0.0f, 1.0f);
-        radiance[0] += kd * diffuse * cDiffuse[0] * lightColor[0];
-        radiance[1] += kd * diffuse * cDiffuse[1] * lightColor[1];
-        radiance[2] += kd * diffuse * cDiffuse[2] * lightColor[2];
+        float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
+        vec3 bounce;
+        for (int i = 0; i < 3; i++) {
+            bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
+        }
+        float specular = powf(vec3_mul_inner(bounce, looking), sample->shininess);
+
+        for (int i = 0; i < 3; i++) {
+            radiance[i] += kd * facing * sample->diffuse[i] * lightColor[i];
+            radiance[i] += ks * specular * sample->specular[i] * lightColor[i];
+        }
+
     }
 }
 
@@ -95,7 +101,7 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
             vec3 normal;
             get_normal_from(current_position, params, normal);
             vec3 color;
-            phongLight(color, normal);
+            phongLight(color, direction, normal, &res);
             vec3_dup(radiance, color);
             break;
         } else {
@@ -113,6 +119,7 @@ void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 ori
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
 
 void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
+    // float param = 0.1f;
     SceneParams params;
     params.offset = 0.1f;
     const float *raw_params = float_pointer_from_params(&params);
