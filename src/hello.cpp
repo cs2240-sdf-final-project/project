@@ -3,159 +3,38 @@
 #include <stdio.h>
 #include <assert.h>
 #include "linmath.h"
+#include "scene.c"
 #include "sim_random.h"
-
 
 int enzyme_dup;
 int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
 
-float clamp(float x, float min, float max) {
-    return fmaxf(fminf(x, max), min);
-}
-
-void vec3_clamp(vec3 out, const vec3 x, const vec3 min, const vec3 max) {
-    vec3_min(out, x, max);
-    vec3_max(out, out, min);
-}
-
-void dehomogenize(vec3 out, const vec4 in) {
-    for (int i = 0; i < 3; i++) {
-        out[i] = in[i] / in[3];
-    }
-}
-
 float lerp(float x, float in_min, float in_max, float out_min, float out_max) {
     return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min);
 }
 
-void vec3_set(vec3 out, float value) {
-    vec3 to_set = { value, value, value };
-    vec3_dup(out, to_set);
+float sdf_normal_wrapper(const vec3 pos, const float *params) {
+    SceneParams scene_params;
+    params_from_float_pointer(params, &scene_params);
+    SceneSample sample;
+    scene_sample(pos, &scene_params, &sample);
+    return sample.distance;
 }
 
-typedef struct {
-    float distance;
-    vec3 normal;
-} SdfResult;
+extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, const float *);
 
-
-void vec2_abs(vec2 out, const vec2 in) {
-    for (int i = 0; i < 2; i++) {
-        out[i] = fabsf(in[i]);
-    }
-}
-void sdfCylinder(const vec3 origin,float radius, float height, float param, SdfResult *result){
-    vec3 pos;
-    vec3_dup(pos, origin);
-    pos[2] += param;
-
-    vec2 xz;
-    xz[0] = pos[0];
-    xz[1] = pos[2];
-    float xzLen = vec2_len(xz);
-
-    vec2 d;
-    d[0] = xzLen - radius; 
-    d[1] = fabsf(pos[1]) - height; 
-
-    vec2 abs_d;
-    vec2_abs(abs_d, d);
-
-    float max_d = fmaxf(d[0], d[1]);
-    float min_d = fminf(max_d, 0.0f);
-
-    vec2 d_clamped;
-    d_clamped[0] = fmaxf(d[0], 0.0f);
-    d_clamped[1] = fmaxf(d[1], 0.0f);
-    float dist = min_d + vec2_len(d_clamped);
-
-
-    result->distance = dist;
-    vec3_norm(result->normal, pos);
-}
-void sdfPlane(const vec3 origin, const vec3 normal, const float height, float param, SdfResult *result) {
-   
-    
-    vec3 pos;
-    vec3_dup(pos, origin);
-    pos[2] += param;
-
-    float dist = vec3_mul_inner(pos, normal) + height;
-    result->distance = dist;
-    vec3_norm(result->normal, pos);
-}
-
-
-void sdfTriPrism(const vec3 orgin, const float h0, const float h1 , float param, SdfResult *result) {
-    //h[0] represents half the length of the base of the triangular prism
-    //h[1] represents half the height of the prism along the z-axis
-    vec3 pos;
-    vec3_dup(pos, orgin);
-    pos[2] += param;
-
-    vec3 q = {fabsf(pos[0]), fabsf(pos[1]), fabsf(pos[2])};
-    float dist = fmaxf(q[2] - h1, fmaxf(q[0] * 0.866025f + pos[1] * 0.5f, -pos[1]) - h0 * 0.5f);
-    result->distance = dist;
-    vec3_norm(result->normal, pos);
-}
-
-void sdfVerticalCapsule(const vec3 origin, float height, float radius, float param, SdfResult *result) {
-    vec3 pos;
-    vec3_dup(pos, origin);
-    pos[2] += param;
-
-    pos[1] -= clamp(pos[1], 0.0f, height);
-
-    result->distance = vec3_len(pos) - radius;
-    vec3_norm(result->normal, pos);
-}
-
-
-
-void sdf_sphere(const vec3 pos, float param, SdfResult *result) {
-    vec3 origin;
-    vec3_set(origin, 0.0);
-
-    origin[2] += param;
-
-    vec3 displacement;
-    vec3_sub(displacement, pos, origin);
-
-    result->distance = vec3_len(displacement) - 3.5f;
-    vec3_norm(result->normal, displacement);
-}
-
-void sdf(const vec3 pos, float param, SdfResult *result) {
-    //sdfCylinder(pos, 0.5, 1.0, param, result);
-    //vec3 normal = {1.0, 0.0, 0.0};
-    //sdfPlane(pos, normal, 0.3, 0.5, result);
-    sdfVerticalCapsule(pos, 2.0, 1.0, param, result);
-    //sdfTriPrism(pos, 1.0, 5.0, param, result);
-    
-}
-
-
-float sdf_normal_wrapper(const vec3 pos, float param) {
-    SdfResult res;
-    sdf(pos, param, &res);
-    return res.distance;
-}
-
-extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, float);
-
-void sdf2(const vec3 pos, float param, SdfResult *result) {
+void get_normal_from(const vec3 pos, const SceneParams *params, vec3 normal) {
     vec3 dpos;
     vec3_set(dpos, 0.0f);
-
+    const float *raw_params = float_pointer_from_params(params);
     __enzyme_autodiff_normal(
         (void*)sdf_normal_wrapper,
         enzyme_dup, pos, dpos,
-        enzyme_const, param
+        enzyme_const, raw_params
     );
-    result->distance = sdf_normal_wrapper(pos, param);
-    vec3_dup(result->normal, dpos);
+    vec3_dup(normal, dpos);
 }
 
 void ray_step(vec3 origin, const vec3 direction, float t) {
@@ -173,17 +52,7 @@ void color_normal(vec3 radiance, const vec3 normal) {
     vec3_add(radiance, radiance, to_add);
 }
 
-            // lightDir = -normalize(lightDirections[i].xyz);
-            // vec4 lightColor = lightColors[i];
-
-            // // Diffuse term
-            // fragColor += k_d * clamp(max(dot(lightDir, normal), 0.0),0.0,1.0) * cDiffuse * lightColor;
 void phongLight(vec3 radiance, const vec3 normal) {
-
-    // vec3 light_dir = {-3.f, 0.f, -2.f };
-    // //vec3 light_dir = {0.f, 1.f, -0.f };
-    // vec3_norm(light_dir, light_dir);
-
     float lightColors[3][3] = {
         {1.0f, 0.0f, 0.0f},
         {0.0f, 1.0f, 0.0f},
@@ -215,18 +84,18 @@ void phongLight(vec3 radiance, const vec3 normal) {
     }
 }
 
-void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, float param) {
+void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const SceneParams *params) {
     vec3_set(radiance, 0.0);
     vec3 current_position;
     vec3_dup(current_position, origin);
     for (int i = 0; i < 100; i++) {
-        SdfResult res;
-        sdf2(current_position, param, &res);
+        SceneSample res;
+        scene_sample(current_position, params, &res);
         if (res.distance < 1e-4f) {
+            vec3 normal;
+            get_normal_from(current_position, params, normal);
             vec3 color;
-            //color_normal(color, res.normal);
-
-            phongLight(color, res.normal);
+            phongLight(color, normal);
             vec3_dup(radiance, color);
             break;
         } else {
@@ -235,10 +104,18 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
     }
 }
 
-extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, float, float);
+void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const float *raw_params) {
+    SceneParams params;
+    params_from_float_pointer(raw_params, &params);
+    render_get_radiance(radiance, rng, origin, direction, &params);
+}
+
+extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
 
 void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    float param = 0.1f;
+    SceneParams params;
+    params.offset = 0.1f;
+    const float *raw_params = float_pointer_from_params(&params);
     float d_param = 1.0f;
 
     vec3 radiance;
@@ -247,12 +124,12 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
     vec3_set(d_radiance, 1.f);
 
     __enzyme_fwddiff_radiance(
-        (void*)render_get_radiance,
+        (void*)render_get_radiance_wrapper,
         enzyme_dup, radiance, d_radiance,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_dup, param, d_param);
+        enzyme_dup, raw_params, &d_param);
 
     vec3_dup(real, radiance);
     vec3_dup(gradient, d_radiance);
@@ -404,4 +281,3 @@ int main(int argc, char *argv[]) {
     free_image(&real);
     free_image(&gradient);
 }
-
