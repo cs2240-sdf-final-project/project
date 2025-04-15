@@ -5,11 +5,42 @@
 #include "linmath.h"
 #include "sim_random.h"
 
-
 int enzyme_dup;
 int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
+
+enum BisectAffinity {
+    BISECT_LEFT,
+    BISECT_RIGHT,
+    BISECT_STOP,
+};
+
+typedef BisectAffinity AFFINITY_FUNC(float evaluate_at, int iter_count, void *context);
+typedef float MIDPOINT_FUNC(float a, float b, void *context);
+inline float bisect(float t_min, float t_max,
+    AFFINITY_FUNC *get_affinity, MIDPOINT_FUNC *get_midpoint, void *context) {
+    int iter_count = 0;
+    for (;;) {
+        float t_mid = get_midpoint(t_min, t_max, context);
+        BisectAffinity aff = get_affinity(t_mid, iter_count, context);
+        if (aff == BISECT_STOP) {
+            return t_mid;
+        } else if (aff == BISECT_LEFT) {
+            t_max = t_mid;
+        } else if (aff == BISECT_RIGHT) {
+            t_min = t_mid;
+        }
+        iter_count += 1;
+    }
+}
+
+void ray_step(vec3 out, const vec3 origin, const vec3 direction, float t) {
+    vec3 step_size;
+    vec3_dup(step_size, direction);
+    vec3_scale(step_size, step_size, t);
+    vec3_add(out, origin, step_size);
+}
 
 float clamp(float x, float min, float max) {
     return fmaxf(fminf(x, max), min);
@@ -35,47 +66,21 @@ void vec3_set(vec3 out, float value) {
     vec3_dup(out, to_set);
 }
 
-typedef struct {
-    float distance;
-    vec3 normal;
-    vec3 cDiffuse;
-    vec3 cSpecular;
-    vec3 cAmbient;
-
-    float shininess;
-    
-} SdfResult;
-
-
-void sdf_default(SdfResult *r) {
-    r->distance = INFINITY;
-    vec3_set(r->cDiffuse, 0.f);
-    vec3_set(r->cAmbient, 0.f);
-    vec3_set(r->cSpecular, 0.f);
-    r->shininess = 1.f;
-} 
-
-
-
-
 void vec2_abs(vec2 out, const vec2 in) {
     for (int i = 0; i < 2; i++) {
         out[i] = fabsf(in[i]);
     }
 }
-void sdfCylinder(const vec3 origin,float radius, float height, float param, SdfResult *result){
-    vec3 pos;
-    vec3_dup(pos, origin);
-    pos[2] += param;
 
+float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
     xz[0] = pos[0];
     xz[1] = pos[2];
     float xzLen = vec2_len(xz);
 
     vec2 d;
-    d[0] = xzLen - radius; 
-    d[1] = fabsf(pos[1]) - height; 
+    d[0] = xzLen - radius;
+    d[1] = fabsf(pos[1]) - height;
 
     vec2 abs_d;
     vec2_abs(abs_d, d);
@@ -88,161 +93,250 @@ void sdfCylinder(const vec3 origin,float radius, float height, float param, SdfR
     d_clamped[1] = fmaxf(d[1], 0.0f);
     float dist = min_d + vec2_len(d_clamped);
 
-
-    result->distance = dist;
-    vec3_norm(result->normal, pos);
+    return dist;
 }
-void sdfPlane(const vec3 origin, const vec3 normal, const float height, float param, SdfResult *result) {
 
-    vec3 pos;
-    vec3_dup(pos, origin);
-    pos[2] += param;
-
+float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     float dist = vec3_mul_inner(pos, normal) + height;
-    result->distance = dist;
-    vec3_norm(result->normal, pos);
+    return dist;
 }
 
-
-void sdfTriPrism(const vec3 orgin, const float h0, const float h1 , float param, SdfResult *result) {
-
+float sdfTriPrism(const vec3 orgin, float h0, float h1) {
     //h[0] represents half the length of the base of the triangular prism
     //h[1] represents half the height of the prism along the z-axis
     vec3 pos;
     vec3_dup(pos, orgin);
-    pos[2] += param;
 
     vec3 q = {fabsf(pos[0]), fabsf(pos[1]), fabsf(pos[2])};
     float dist = fmaxf(q[2] - h1, fmaxf(q[0] * 0.866025f + pos[1] * 0.5f, -pos[1]) - h0 * 0.5f);
-    result->distance = dist;
-    vec3_norm(result->normal, pos);
+    return dist;
 }
 
-void sdfVerticalCapsule(const vec3 origin, float height, float radius, float param, SdfResult *result) {
-
+float sdfVerticalCapsule(const vec3 origin, float height, float radius) {
     vec3 pos;
     vec3_dup(pos, origin);
-    pos[2] += param;
-
     pos[1] -= clamp(pos[1], 0.0f, height);
 
-    result->distance = vec3_len(pos) - radius;
-    vec3_norm(result->normal, pos);
+    return vec3_len(pos) - radius;
 }
 
-
-
-void sdf_sphere(const vec3 pos, float param, SdfResult *result) {
-
+float sdfSphere(const vec3 pos) {
     vec3 origin;
     vec3_set(origin, 0.0);
-
-    origin[2] += param;
-
     vec3 displacement;
     vec3_sub(displacement, pos, origin);
 
-    result->distance = vec3_len(displacement) - 3.5f;
-    vec3_norm(result->normal, displacement);
+    return vec3_len(displacement) - 3.5f;
 }
 
-void sdf_compose(SdfResult *r, SdfResult *a, SdfResult *b) {
-    SdfResult *closest;
-    if (a->distance < b->distance) {
-        closest = a;
-    } else {
-        closest = b;
+
+typedef struct {
+    float offset;
+} SceneParams;
+
+void params_from_float_pointer(const float *params, SceneParams *out) {
+    out->offset = params[0];
+}
+
+const float *float_pointer_from_params(const SceneParams *out) {
+    return &out->offset;
+}
+
+typedef struct {
+    float distance;
+    float ambient[3];
+    float diffuse[3];
+    float specular[3];
+    float shininess;
+} SdfResult;
+
+static inline void default_scene_sample(SdfResult *s) {
+    s->distance = INFINITY;
+    vec3_set(s->ambient, 0.0);
+    vec3_set(s->diffuse, 0.0);
+    vec3_set(s->specular, 0.0);
+    s->shininess = 1.0;
+}
+
+/** writes the output in the first paramemter */
+static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
+    if (destination->distance < b->distance) {
+        return; // nothing to be done
     }
-    r->distance = closest->distance;
-    vec3_dup(r->cDiffuse, closest->cDiffuse);
-    vec3_dup(r->cAmbient, closest->cAmbient);
-    vec3_dup(r->cSpecular, closest->cSpecular);
-    r->shininess = closest->shininess;
+    destination->distance = b->distance;
+    vec3_dup(destination->ambient, b->ambient);
+    vec3_dup(destination->diffuse, b->diffuse);
+    vec3_dup(destination->specular, b->specular);
+    destination->shininess = b->shininess;
 }
 
-void sdf(const vec3 pos, float param, SdfResult *result) {
-    // sdfCylinder(pos, 0.5, 1.0, param, result);
-    // vec3 diffuse = {1.0f, 0.0f, 0.0f};
-    // vec3_dup(result->cDiffuse, diffuse);
-
-    // return;
-
-    SdfResult a;
-    sdf_default(&a);
-
-
-    sdfCylinder(pos, 0.5, 1.0, param, &a);
-    vec3 diffuse = {1.0f, 0.0f, 0.0f};
-    vec3_dup(a.cDiffuse, diffuse);
-    vec3 offset = {3.f,3.f,3.f};
-    //vec3 normal = {1.0, 0.0, 0.0};
-    //sdfPlane(pos, normal, 0.3, 0.5, result);
+static inline void object_foreground_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 offset = {-1.0, 1.0, 6.0};
+    offset[0] += params->offset;
     vec3 pos1;
-    vec3_add(pos1, offset, pos);
-    SdfResult b;
-    sdf_default(&b);
-
-    sdfVerticalCapsule(pos1, 2.0, 1.0, param, &b);
-
-    vec3 diffuse2 = {0.0f, 0.0f, 1.0f};
-    vec3_dup(b.cDiffuse, diffuse2);
-
-    //sdfTriPrism(pos, 1.0, 5.0, param, result)
-    sdf_compose(result, &a, &b);
+    vec3_add(pos1, pos, offset);
+    sample->distance = sdfCylinder(pos1, 1.0f, 2.0f);
+    vec3_set(sample->ambient, 0.1f);
+    vec3 cDiffuse = {0.3f, 0.5f, 0.8f};
+    vec3_dup(sample->diffuse, cDiffuse);
 }
 
-float sdf_normal_wrapper(const vec3 pos, float param) {
-    SdfResult res;
-    sdf(pos, param, &res);
-    return res.distance;
+
+static inline void object_foreground(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    sample->distance = sdfVerticalCapsule(pos, 2.0, 1.0);
+    vec3_set(sample->diffuse, 1.0f);
+    vec3_set(sample->specular, 0.1f);
 }
 
-extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, float);
+inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    default_scene_sample(sample);
 
-void sdf2(const vec3 pos, float param, SdfResult *result) {
+    SdfResult working;
+
+    default_scene_sample(&working);
+    object_foreground_capsule(pos, params, &working);
+    compose_scene_sample(sample, &working);
+
+    default_scene_sample(&working);
+    object_foreground(pos, params, &working);
+    compose_scene_sample(sample, &working);
+}
+
+/** specialization of scene_sample that just returns the value of the sdf */
+float scene_sample_sdf(const vec3 pos, const SceneParams *params) {
+    SdfResult sample;
+    scene_sample(pos, params, &sample);
+    return sample.distance;
+}
+
+
+float directional_derivative_inner(const vec3 origin, const vec3 direction, float t, const SceneParams *params) {
+    vec3 scaled;
+    vec3_scale(scaled, direction, t);
+    vec3 added;
+    vec3_add(added, origin, scaled);
+    return scene_sample_sdf(added, params);
+}
+
+extern float __enzyme_fwddiff_directional(void *,
+    int, const float *,
+    int, const float *,
+    int, float, float,
+    int, const SceneParams *);
+
+float directional_derivative(const vec3 pos, const vec3 direction, float t, const SceneParams *params) {
+    float dt = 1.0f;
+    return __enzyme_fwddiff_directional(
+        (void *)directional_derivative_inner,
+        enzyme_const, pos,
+        enzyme_const, direction,
+        enzyme_dup, t, dt,
+        enzyme_const, params);
+}
+
+
+typedef struct {
+    vec3 origin, direction;
+    const SceneParams *params;
+    int iter_cap;
+} CriticalPointContext;
+
+static inline float critical_point_bisect_midpoint(float a, float b, void *context) {
+    CriticalPointContext *ctx = (CriticalPointContext *)context;
+    float dir_a = directional_derivative(ctx->origin, ctx->direction, a, ctx->params);
+    float dir_b = directional_derivative(ctx->origin, ctx->direction, b, ctx->params);
+    // have points (a, dir_a) and (b, dir_b). want to find the zero crossing.
+    float denom = dir_a - dir_b;
+    if (denom < 1e-5) {
+        return a; // arbitrarily choose one of the endpoints
+    }
+    float numer = dir_a * b - a * dir_b;
+    return numer / denom;
+}
+
+static inline BisectAffinity critical_point_bisect_affinity(float t, int iter_count, void *context) {
+    CriticalPointContext *ctx = (CriticalPointContext *)context;
+    if (iter_count >= ctx->iter_cap) {
+        return BISECT_STOP;
+    }
+    // do a distance check on a fixed small iteration number to stop early
+    const int early_stop_check_iter = 2;
+    const float preliminary_distance_threshold = 5e-1;
+    if (iter_count == early_stop_check_iter) {
+        vec3 pos;
+        ray_step(pos, ctx->origin, ctx->direction, t);
+        if (scene_sample_sdf(pos, ctx->params) > preliminary_distance_threshold) {
+            return BISECT_STOP;
+        }
+    }
+    float dir_t = directional_derivative(ctx->origin, ctx->direction, t, ctx->params);
+    bool is_approaching = dir_t < 0;
+    return is_approaching ? BISECT_RIGHT : BISECT_LEFT;
+}
+
+typedef struct {
+    bool found_critical_point;
+    float t_if_found_critical_point;
+} SearchResult;
+
+inline SearchResult search_for_critical_point(const vec3 origin, const vec3 direction, const SceneParams *params, float t_min, float t_max) {
+    // width of the scene band
+    const float distance_threshold = 1e-1f;
+
+    // we consider directional derivatives this large to be zero
+    const float directional_derivative_threshold = 1e-4f;
+
+    // we will bisect this many iterations in order to find the true location of the minimum directional derivative
+    const int extensive_depth = 12;
+
+    CriticalPointContext context;
+    vec3_dup(context.origin, origin);
+    vec3_dup(context.direction, direction);
+    context.params = params;
+    context.iter_cap = extensive_depth;
+
+    float best_t = bisect(t_min, t_max, critical_point_bisect_affinity, critical_point_bisect_midpoint, &context);
+    vec3 best_pos;
+    ray_step(best_pos, origin, direction, best_t);
+    if (scene_sample_sdf(best_pos, params) > distance_threshold) {
+        SearchResult ret = { false, 0.0 };
+        return ret;
+    }
+
+    float best_dir_t = directional_derivative(origin, direction, best_t, params);
+    if (fabsf(best_dir_t) > directional_derivative_threshold) {
+        SearchResult ret = { false, 0.0 };
+        return ret;
+    }
+    SearchResult ret = { true, best_t };
+    return ret;
+}
+
+float sdf_normal_wrapper(const vec3 pos, const float *params) {
+    SceneParams scene_params;
+    params_from_float_pointer(params, &scene_params);
+    return scene_sample_sdf(pos, &scene_params);
+}
+
+extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, const float *);
+
+void get_normal_from(vec3 normal, const vec3 pos, const SceneParams *params) {
     vec3 dpos;
     vec3_set(dpos, 0.0f);
-
+    const float *raw_params = float_pointer_from_params(params);
     __enzyme_autodiff_normal(
         (void*)sdf_normal_wrapper,
         enzyme_dup, pos, dpos,
-        enzyme_const, param
+        enzyme_const, raw_params
     );
-    sdf(pos, param, result);
-    vec3_dup(result->normal, dpos);
+    vec3_dup(normal, dpos);
 }
 
-void ray_step(vec3 origin, const vec3 direction, float t) {
-    vec3 step_size;
-    vec3_dup(step_size, direction);
-    vec3_scale(step_size, step_size, t);
-    vec3_add(origin, origin, step_size);
-}
-
-void color_normal(vec3 radiance, const vec3 normal) {
-    vec3_dup(radiance, normal);
-    vec3_scale(radiance, radiance, 0.5);
-    vec3 to_add;
-    vec3_set(to_add, 0.5);
-    vec3_add(radiance, radiance, to_add);
-}
-
-            // lightDir = -normalize(lightDirections[i].xyz);
-            // vec4 lightColor = lightColors[i];
-
-            // // Diffuse term
-            // fragColor += k_d * clamp(max(dot(lightDir, normal), 0.0),0.0,1.0) * cDiffuse * lightColor;
-void phongLight(vec3 radiance,  SdfResult *res) {
-           
-
-    // vec3 light_dir = {-3.f, 0.f, -2.f };
-    // //vec3 light_dir = {0.f, 1.f, -0.f };
-    // vec3_norm(light_dir, light_dir);
-
+void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
     float lightColors[3][3] = {
-        {0.9f, 0.9f, 0.9f},
-        {0.9f, 0.9f, 0.9f},
-        {0.9f, 0.9f, 0.9f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
     };
 
     float lightDirections[3][3] = {
@@ -252,49 +346,158 @@ void phongLight(vec3 radiance,  SdfResult *res) {
     };
 
     float kd = 0.5;
+    float ks = 1.0;
 
-    // diffuse color of the object
-
-    vec3_set(radiance, 0.f);
+    vec3_dup(radiance, sample->ambient);
     for (int l = 0; l < 3; l++) {
         vec3 lightColor;
         vec3_dup(lightColor, lightColors[l]);
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
 
-        //printf("cdiffuse %f %f %f\n", res->cDiffuse[0], res->cDiffuse[1], res->cDiffuse[2]);
+        float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
+        vec3 bounce;
+        for (int i = 0; i < 3; i++) {
+            bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
+        }
+        float specular = powf(vec3_mul_inner(bounce, looking), sample->shininess);
 
-        float diffuse = clamp(fmaxf(vec3_mul_inner(light_dir, res->normal), 0.0f), 0.0f, 1.0f);
-        radiance[0] += kd * diffuse * res->cDiffuse[0] * lightColor[0];
-        radiance[1] += kd * diffuse * res->cDiffuse[1] * lightColor[1];
-        radiance[2] += kd * diffuse * res->cDiffuse[2] * lightColor[2];
-    }
-}
-
-void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, float param) {
-    vec3_set(radiance, 0.0);
-    vec3 current_position;
-    vec3_dup(current_position, origin);
-    for (int i = 0; i < 100; i++) {
-        SdfResult res;
-        sdf2(current_position, param, &res);
-        if (res.distance < 1e-4f) {
-            vec3 color;
-            //color_normal(color, res.normal);
-
-            phongLight(color, &res);
-            vec3_dup(radiance, color);
-            break;
-        } else {
-            ray_step(current_position, direction, res.distance);
+        for (int i = 0; i < 3; i++) {
+            radiance[i] += kd * facing * sample->diffuse[i] * lightColor[i];
+            radiance[i] += ks * specular * sample->specular[i] * lightColor[i];
         }
     }
 }
 
-extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, float, float);
+typedef struct {
+    bool found_intersection;
+    float intersection_t;
+} IntersectionResult;
+
+void get_critial_point_along(
+    vec3 radiance,
+    const vec3 origin,
+    const vec3 direction,
+    const SceneParams *params,
+    RandomState *rng
+) {
+    // we take steps at most this size in order to avoid missing
+    // sign changes in the directional derivatives
+    const float max_step_size = 1.0f;
+    // take this many steps to balance performance with exploring the entire scene
+    const int number_of_steps = 1'000;
+
+    // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
+    const float contact_threshold = 1e-4f;
+
+    float t = 0.0;
+    float previous_t = 0.0;
+
+    SearchResult critical_point = { false, 0.0 };
+    IntersectionResult intersection = { false, 0.0 };
+
+    for (int i = 0; i < number_of_steps; i++) {
+        float dir_previous_t = directional_derivative(origin, direction, previous_t, params);
+        float dir_t = directional_derivative(origin, direction, t, params);
+
+        // look for a sign change in the directional derivative
+        if (!critical_point.found_critical_point && ((dir_previous_t < 0) && (dir_t > 0))) {
+            // let's try to find critical_point between t and previous_t
+            SearchResult local_res = search_for_critical_point(origin, direction, params, previous_t, t);
+            if (local_res.found_critical_point) {
+                critical_point = local_res;
+            }
+        }
+
+        vec3 pos;
+        ray_step(pos, origin, direction, t);
+        float distance = scene_sample_sdf(pos, params);
+
+        if (distance < contact_threshold) {
+            intersection.found_intersection = true;
+            intersection.intersection_t = t;
+            break;
+        }
+
+        float step_size = fminf(max_step_size, distance);
+        previous_t = t;
+        t += step_size;
+    }
+
+    if (intersection.found_intersection) {
+        vec3 current_position;
+        ray_step(current_position, origin, direction, intersection.intersection_t);
+
+        SdfResult sample;
+        scene_sample(current_position, params, &sample);
+
+        vec3 normal;
+        get_normal_from(normal, current_position, params);
+
+        phongLight(radiance, direction, normal, &sample);
+    } else {
+        vec3 red = {1.0f, 0.0f, 0.0f};
+        vec3 black = {0.0f, 0.0f, 0.0f};
+        float *which;
+        if (critical_point.found_critical_point) {
+            which = red;
+        } else {
+            which = black;
+        }
+        vec3_dup(radiance, which);
+    }
+}
+
+// void color_normal(vec3 radiance, const vec3 normal) {
+//     vec3_dup(radiance, normal);
+//     vec3_scale(radiance, radiance, 0.5);
+//     vec3 to_add;
+//     vec3_set(to_add, 0.5);
+//     vec3_add(radiance, radiance, to_add);
+// }
+
+            // lightDir = -normalize(lightDirections[i].xyz);
+            // vec4 lightColor = lightColors[i];
+
+            // // Diffuse term
+            // fragColor += k_d * clamp(max(dot(lightDir, normal), 0.0),0.0,1.0) * cDiffuse * lightColor;
+
+void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const SceneParams *params) {
+    get_critial_point_along(radiance, origin, direction, params, rng);
+    return;
+    
+    vec3_set(radiance, 0.0);
+    vec3 current_position;
+    vec3_dup(current_position, origin);
+    for (int i = 0; i < 100; i++) {
+        float distance = scene_sample_sdf(current_position, params);
+        if (distance < 1e-4f) {
+            SdfResult sample;
+            scene_sample(current_position, params, &sample);
+            
+            vec3 normal;
+            get_normal_from(normal, current_position, params);
+    
+            phongLight(radiance, direction, normal, &sample);
+            break;
+        } else {
+            ray_step(current_position, current_position, direction, distance);
+        }
+    }
+}
+
+void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const float *raw_params) {
+    SceneParams params;
+    params_from_float_pointer(raw_params, &params);
+    render_get_radiance(radiance, rng, origin, direction, &params);
+}
+
+extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
 
 void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    float param = 0.1f;
+    SceneParams params;
+    params.offset = 0.1f;
+    const float *raw_params = float_pointer_from_params(&params);
     float d_param = 1.0f;
 
     vec3 radiance;
@@ -303,16 +506,18 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
     vec3_set(d_radiance, 1.f);
 
     __enzyme_fwddiff_radiance(
-        (void*)render_get_radiance,
+        (void*)render_get_radiance_wrapper,
         enzyme_dup, radiance, d_radiance,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_dup, param, d_param);
+        enzyme_dupnoneed, raw_params, &d_param);
 
     vec3_dup(real, radiance);
     vec3_dup(gradient, d_radiance);
 }
+
+
 
 void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
     vec3_set(out_real, 0.f);
