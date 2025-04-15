@@ -15,15 +15,12 @@ float lerp(float x, float in_min, float in_max, float out_min, float out_max) {
     return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min);
 }
 
-float directional_derivative_inner(const vec3 pos, const vec3 direction, float t, const SceneParams *params) {
+float directional_derivative_inner(const vec3 origin, const vec3 direction, float t, const SceneParams *params) {
     vec3 scaled;
     vec3_scale(scaled, direction, t);
     vec3 added;
-    vec3_add(added, pos, scaled);
-
-    SceneSample sample;
-    scene_sample(added, params, &sample);
-    return sample.distance;
+    vec3_add(added, origin, scaled);
+    return scene_sample_sdf(added, params);
 }
 
 extern float __enzyme_fwddiff_directional(void *,
@@ -32,8 +29,7 @@ extern float __enzyme_fwddiff_directional(void *,
     int, float, float,
     int, const SceneParams *);
 
-float directional_derivative(const vec3 pos, const vec3 direction, const SceneParams *params) {
-    float t = 0.0f;
+float directional_derivative(const vec3 pos, const vec3 direction, float t, const SceneParams *params) {
     float dt = 1.0f;
     return __enzyme_fwddiff_directional(
         (void *)directional_derivative_inner,
@@ -46,14 +42,12 @@ float directional_derivative(const vec3 pos, const vec3 direction, const ScenePa
 float sdf_normal_wrapper(const vec3 pos, const float *params) {
     SceneParams scene_params;
     params_from_float_pointer(params, &scene_params);
-    SceneSample sample;
-    scene_sample(pos, &scene_params, &sample);
-    return sample.distance;
+    return scene_sample_sdf(pos, &scene_params);
 }
 
 extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, const float *);
 
-void get_normal_from(const vec3 pos, const SceneParams *params, vec3 normal) {
+void get_normal_from(vec3 normal, const vec3 pos, const SceneParams *params) {
     vec3 dpos;
     vec3_set(dpos, 0.0f);
     const float *raw_params = float_pointer_from_params(params);
@@ -65,11 +59,11 @@ void get_normal_from(const vec3 pos, const SceneParams *params, vec3 normal) {
     vec3_dup(normal, dpos);
 }
 
-void ray_step(vec3 origin, const vec3 direction, float t) {
+void ray_step(vec3 out, const vec3 origin, const vec3 direction, float t) {
     vec3 step_size;
     vec3_dup(step_size, direction);
     vec3_scale(step_size, step_size, t);
-    vec3_add(origin, origin, step_size);
+    vec3_add(out, origin, step_size);
 }
 
 void color_normal(vec3 radiance, const vec3 normal) {
@@ -117,25 +111,176 @@ void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const Scen
     }
 }
 
-void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const SceneParams *params) {
-    vec3_set(radiance, 0.0);
-    vec3 current_position;
-    vec3_dup(current_position, origin);
-    for (int i = 0; i < 100; i++) {
-        SceneSample res;
-        scene_sample(current_position, params, &res);
-        // float directionalDeriv = directional_derivative(current_position, direction, params)
+enum BisectAffinity {
+    BISECT_LEFT,
+    BISECT_RIGHT,
+    BISECT_STOP,
+};
 
-        if (res.distance < 1e-4f) {
-            vec3 normal;
-            get_normal_from(current_position, params, normal);
-            vec3 color;
-            phongLight(color, direction, normal, &res);
-            vec3_dup(radiance, color);
-            break;
-        } else {
-            ray_step(current_position, direction, res.distance);
+typedef BisectAffinity AFFINITY_FUNC(float evaluate_at, int iter_count, void *context);
+typedef float MIDPOINT_FUNC(float a, float b, void *context);
+inline float bisect(float t_min, float t_max,
+    AFFINITY_FUNC *get_affinity, MIDPOINT_FUNC *get_midpoint, void *context) {
+    int iter_count = 0;
+    for (;;) {
+        float t_mid = get_midpoint(t_min, t_max, context);
+        BisectAffinity aff = get_affinity(t_mid, iter_count, context);
+        if (aff == BISECT_STOP) {
+            return t_mid;
+        } else if (aff == BISECT_LEFT) {
+            t_max = t_mid;
+        } else if (aff == BISECT_RIGHT) {
+            t_min = t_mid;
         }
+        iter_count += 1;
+    }
+}
+
+typedef struct {
+    vec3 origin, direction;
+    const SceneParams *params;
+    int iter_cap;
+} CriticalPointContext;
+
+static inline float critical_point_bisect_midpoint(float a, float b, void *context) {
+    CriticalPointContext *ctx = (CriticalPointContext *)context;
+    float dir_a = directional_derivative(ctx->origin, ctx->direction, a, ctx->params);
+    float dir_b = directional_derivative(ctx->origin, ctx->direction, b, ctx->params);
+    // have points (a, dir_a) and (b, dir_b). want to find the zero crossing.
+    float denom = dir_a - dir_b;
+    if (denom < 1e-5) {
+        return a; // arbitrarily choose one of the endpoints
+    }
+    float numer = dir_a * b - a * dir_b;
+    return numer / denom;
+}
+
+static inline BisectAffinity critical_point_bisect_affinity(float t, int iter_count, void *context) {
+    CriticalPointContext *ctx = (CriticalPointContext *)context;
+    if (iter_count >= ctx->iter_cap) {
+        return BISECT_STOP;
+    }
+    // do a distance check on a fixed small iteration number to stop early
+    const int early_stop_check_iter = 2;
+    const float preliminary_distance_threshold = 5e-1;
+    if (iter_count == early_stop_check_iter) {
+        vec3 pos;
+        ray_step(pos, ctx->origin, ctx->direction, t);
+        if (scene_sample_sdf(pos, ctx->params) > preliminary_distance_threshold) {
+            return BISECT_STOP;
+        }
+    }
+    float dir_t = directional_derivative(ctx->origin, ctx->direction, t, ctx->params);
+    bool is_approaching = dir_t < 0;
+    return is_approaching ? BISECT_RIGHT : BISECT_LEFT;
+}
+
+typedef struct {
+    bool found_critical_point;
+    float t_if_found_critical_point;
+} SearchResult;
+
+inline SearchResult search_for_critical_point(const vec3 origin, const vec3 direction, const SceneParams *params, float t_min, float t_max) {
+    // width of the scene band
+    const float distance_threshold = 1e-1f;
+
+    // we consider directional derivatives this large to be zero
+    const float directional_derivative_threshold = 1e-4f;
+
+    // we will bisect this many iterations in order to find the true location of the minimum directional derivative
+    const int extensive_depth = 12;
+
+    CriticalPointContext context;
+    vec3_dup(context.origin, origin);
+    vec3_dup(context.direction, direction);
+    context.params = params;
+    context.iter_cap = extensive_depth;
+
+    float best_t = bisect(t_min, t_max, critical_point_bisect_affinity, critical_point_bisect_midpoint, &context);
+    vec3 best_pos;
+    ray_step(best_pos, origin, direction, best_t);
+    if (scene_sample_sdf(best_pos, params) > distance_threshold) {
+        SearchResult ret = { false, 0.0 };
+        return ret;
+    }
+
+    float best_dir_t = directional_derivative(origin, direction, best_t, params);
+    if (fabsf(best_dir_t) > directional_derivative_threshold) {
+        SearchResult ret = { false, 0.0 };
+        return ret;
+    }
+    SearchResult ret = { true, best_t };
+    return ret;
+}
+
+typedef struct {
+    bool found_intersection;
+    float intersection_t;
+} IntersectionResult;
+
+float get_critial_point_along(
+    vec3 radiance,
+    const vec3 origin,
+    const vec3 direction,
+    const SceneParams *params,
+    RandomState *rng
+) {
+    // we take steps at most this size in order to avoid missing
+    // sign changes in the directional derivatives
+    const float max_step_size = 1.0f;
+    // take this many steps to balance performance with exploring the entire scene
+    const int number_of_steps = 1'000;
+
+    // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
+    const float contact_threshold = 1e-4;
+
+    float t = 0.0;
+    float dir_t = -1.0;
+    float previous_t;
+    float dir_previous_t;
+
+    SearchResult critical_point = { false, 0.0 };
+    IntersectionResult intersection;
+
+    for (int i = 0; i < number_of_steps; i++) {
+        float dir_t = directional_derivative(origin, direction, t, params);
+
+        // look for a sign change in the directional derivative
+        if (!critical_point.found_critical_point && ((dir_t < 0) && (dir_previous_t > 0))) {
+            // let's try to find critical_point between t and previous_t
+            SearchResult local_res = search_for_critical_point(origin, direction, params, previous_t, t);
+            if (local_res.found_critical_point) {
+                critical_point = local_res;
+            }
+        }
+
+        float sdf = scene_sample_sdf(current_position, params);
+
+        if (distance < contact_threshold) {
+            intersection.found_intersection = true;
+            intersection.intersection_t = t;
+            break;
+        }
+
+        float step_size = fminf(max_step_size, distance);
+        t += step_size;
+        previous_t = t;
+        dir_previous_t = dir_t;
+    }
+
+    if (intersection.found_intersection) {
+        vec3 current_position;
+        ray_step(current_position, origin, direction, intersection.intersection_t);
+
+        SceneSample sample;
+        scene_sample(current_position, params, &sample);
+
+        vec3 normal;
+        get_normal_from(normal, current_position, params);
+
+        phongLight(radiance, direction, normal, &sample);
+    } else {
+        vec3_set(radiance, 0.0);
     }
 }
 
@@ -240,7 +385,7 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     assert(ic < image->image_width);
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
-        char value = (char)clamp(radiance[p] * 255.f, 0.f, 255.f);
+        char value = (char)clamp(radiance[] * 255.f, 0.f, 255.f);
         image->buf[index] = value;
     }
 }

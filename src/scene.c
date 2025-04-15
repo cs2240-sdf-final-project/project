@@ -22,7 +22,7 @@ typedef struct {
     float shininess;
 } SceneSample;
 
-static void default_scene_sample(SceneSample *s) {
+static inline void default_scene_sample(SceneSample *s) {
     s->distance = INFINITY;
     vec3_set(s->ambient, 0.0);
     vec3_set(s->diffuse, 0.0);
@@ -31,7 +31,7 @@ static void default_scene_sample(SceneSample *s) {
 }
 
 /** writes the output in the first paramemter */
-static void compose_scene_sample(SceneSample *destination, SceneSample *b) {
+static inline void compose_scene_sample(SceneSample *destination, SceneSample *b) {
     if (destination->distance < b->distance) {
         return; // nothing to be done
     }
@@ -42,9 +42,7 @@ static void compose_scene_sample(SceneSample *destination, SceneSample *b) {
     destination->shininess = b->shininess;
 }
 
-typedef void SDF_OBJECT(const vec3 pos, const SceneParams *params, SceneSample *sample);
-
-void object_foreground_capsule(const vec3 pos, const SceneParams *params, SceneSample *sample) {
+static inline void object_foreground_capsule(const vec3 pos, const SceneParams *params, SceneSample *sample) {
     vec3 offset = {-1.0, 1.0, 6.0};
     offset[0] += params->offset;
     vec3 pos1;
@@ -56,13 +54,13 @@ void object_foreground_capsule(const vec3 pos, const SceneParams *params, SceneS
 }
 
 
-void object_foreground(const vec3 pos, const SceneParams *params, SceneSample *sample) {
+static inline void object_foreground(const vec3 pos, const SceneParams *params, SceneSample *sample) {
     sample->distance = sdfVerticalCapsule(pos, 2.0, 1.0);
     vec3_set(sample->diffuse, 1.0f);
     vec3_set(sample->specular, 0.1f);
 }
 
-void scene_sample(const vec3 pos, const SceneParams *params, SceneSample *sample) {
+inline void scene_sample(const vec3 pos, const SceneParams *params, SceneSample *sample) {
     default_scene_sample(sample);
 
     SceneSample working;
@@ -76,8 +74,9 @@ void scene_sample(const vec3 pos, const SceneParams *params, SceneSample *sample
     compose_scene_sample(sample, &working);
 }
 
-//sdfCylinder(pos, 0.5, 1.0, param, result);
-//vec3 normal = {1.0, 0.0, 0.0};
-//sdfPlane(pos, normal, 0.3, 0.5, result);
-// sdfVerticalCapsule(pos, 2.0, 1.0, param, result);
-//sdfTriPrism(pos, 1.0, 5.0, param, result);
+/** specialization of scene_sample that just returns the value of the sdf */
+float scene_sample_sdf(const vec3 pos, const SceneParams *params) {
+    SceneSample sample;
+    scene_sample(pos, params, &sample);
+    return sample.distance;
+}
