@@ -38,7 +38,24 @@ void vec3_set(vec3 out, float value) {
 typedef struct {
     float distance;
     vec3 normal;
+    vec3 cDiffuse;
+    vec3 cSpecular;
+    vec3 cAmbient;
+
+    float shininess;
+    
 } SdfResult;
+
+
+void sdf_default(SdfResult *r) {
+    r->distance = INFINITY;
+    vec3_set(r->cDiffuse, 0.f);
+    vec3_set(r->cAmbient, 0.f);
+    vec3_set(r->cSpecular, 0.f);
+    r->shininess = 1.f;
+} 
+
+
 
 
 void vec2_abs(vec2 out, const vec2 in) {
@@ -76,8 +93,7 @@ void sdfCylinder(const vec3 origin,float radius, float height, float param, SdfR
     vec3_norm(result->normal, pos);
 }
 void sdfPlane(const vec3 origin, const vec3 normal, const float height, float param, SdfResult *result) {
-   
-    
+
     vec3 pos;
     vec3_dup(pos, origin);
     pos[2] += param;
@@ -89,6 +105,7 @@ void sdfPlane(const vec3 origin, const vec3 normal, const float height, float pa
 
 
 void sdfTriPrism(const vec3 orgin, const float h0, const float h1 , float param, SdfResult *result) {
+
     //h[0] represents half the length of the base of the triangular prism
     //h[1] represents half the height of the prism along the z-axis
     vec3 pos;
@@ -102,6 +119,7 @@ void sdfTriPrism(const vec3 orgin, const float h0, const float h1 , float param,
 }
 
 void sdfVerticalCapsule(const vec3 origin, float height, float radius, float param, SdfResult *result) {
+
     vec3 pos;
     vec3_dup(pos, origin);
     pos[2] += param;
@@ -115,6 +133,7 @@ void sdfVerticalCapsule(const vec3 origin, float height, float radius, float par
 
 
 void sdf_sphere(const vec3 pos, float param, SdfResult *result) {
+
     vec3 origin;
     vec3_set(origin, 0.0);
 
@@ -127,15 +146,50 @@ void sdf_sphere(const vec3 pos, float param, SdfResult *result) {
     vec3_norm(result->normal, displacement);
 }
 
-void sdf(const vec3 pos, float param, SdfResult *result) {
-    //sdfCylinder(pos, 0.5, 1.0, param, result);
-    //vec3 normal = {1.0, 0.0, 0.0};
-    //sdfPlane(pos, normal, 0.3, 0.5, result);
-    sdfVerticalCapsule(pos, 2.0, 1.0, param, result);
-    //sdfTriPrism(pos, 1.0, 5.0, param, result);
-    
+void sdf_compose(SdfResult *r, SdfResult *a, SdfResult *b) {
+    SdfResult *closest;
+    if (a->distance < b->distance) {
+        closest = a;
+    } else {
+        closest = b;
+    }
+    r->distance = closest->distance;
+    vec3_dup(r->cDiffuse, closest->cDiffuse);
+    vec3_dup(r->cAmbient, closest->cAmbient);
+    vec3_dup(r->cSpecular, closest->cSpecular);
+    r->shininess = closest->shininess;
 }
 
+void sdf(const vec3 pos, float param, SdfResult *result) {
+    // sdfCylinder(pos, 0.5, 1.0, param, result);
+    // vec3 diffuse = {1.0f, 0.0f, 0.0f};
+    // vec3_dup(result->cDiffuse, diffuse);
+
+    // return;
+
+    SdfResult a;
+    sdf_default(&a);
+
+
+    sdfCylinder(pos, 0.5, 1.0, param, &a);
+    vec3 diffuse = {1.0f, 0.0f, 0.0f};
+    vec3_dup(a.cDiffuse, diffuse);
+    vec3 offset = {3.f,3.f,3.f};
+    //vec3 normal = {1.0, 0.0, 0.0};
+    //sdfPlane(pos, normal, 0.3, 0.5, result);
+    vec3 pos1;
+    vec3_add(pos1, offset, pos);
+    SdfResult b;
+    sdf_default(&b);
+
+    sdfVerticalCapsule(pos1, 2.0, 1.0, param, &b);
+
+    vec3 diffuse2 = {0.0f, 0.0f, 1.0f};
+    vec3_dup(b.cDiffuse, diffuse2);
+
+    //sdfTriPrism(pos, 1.0, 5.0, param, result)
+    sdf_compose(result, &a, &b);
+}
 
 float sdf_normal_wrapper(const vec3 pos, float param) {
     SdfResult res;
@@ -154,7 +208,7 @@ void sdf2(const vec3 pos, float param, SdfResult *result) {
         enzyme_dup, pos, dpos,
         enzyme_const, param
     );
-    result->distance = sdf_normal_wrapper(pos, param);
+    sdf(pos, param, result);
     vec3_dup(result->normal, dpos);
 }
 
@@ -178,16 +232,17 @@ void color_normal(vec3 radiance, const vec3 normal) {
 
             // // Diffuse term
             // fragColor += k_d * clamp(max(dot(lightDir, normal), 0.0),0.0,1.0) * cDiffuse * lightColor;
-void phongLight(vec3 radiance, const vec3 normal) {
+void phongLight(vec3 radiance,  SdfResult *res) {
+           
 
     // vec3 light_dir = {-3.f, 0.f, -2.f };
     // //vec3 light_dir = {0.f, 1.f, -0.f };
     // vec3_norm(light_dir, light_dir);
 
     float lightColors[3][3] = {
-        {1.0f, 0.0f, 0.0f},
-        {0.0f, 1.0f, 0.0f},
-        {0.0f, 0.0f, 1.0f},
+        {0.9f, 0.9f, 0.9f},
+        {0.9f, 0.9f, 0.9f},
+        {0.9f, 0.9f, 0.9f},
     };
 
     float lightDirections[3][3] = {
@@ -199,7 +254,6 @@ void phongLight(vec3 radiance, const vec3 normal) {
     float kd = 0.5;
 
     // diffuse color of the object
-    vec3 cDiffuse = {0.5f, 0.3f, 0.9f};
 
     vec3_set(radiance, 0.f);
     for (int l = 0; l < 3; l++) {
@@ -208,10 +262,12 @@ void phongLight(vec3 radiance, const vec3 normal) {
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
 
-        float diffuse = clamp(fmaxf(vec3_mul_inner(light_dir, normal), 0.0f), 0.0f, 1.0f);
-        radiance[0] += kd * diffuse * cDiffuse[0] * lightColor[0];
-        radiance[1] += kd * diffuse * cDiffuse[1] * lightColor[1];
-        radiance[2] += kd * diffuse * cDiffuse[2] * lightColor[2];
+        //printf("cdiffuse %f %f %f\n", res->cDiffuse[0], res->cDiffuse[1], res->cDiffuse[2]);
+
+        float diffuse = clamp(fmaxf(vec3_mul_inner(light_dir, res->normal), 0.0f), 0.0f, 1.0f);
+        radiance[0] += kd * diffuse * res->cDiffuse[0] * lightColor[0];
+        radiance[1] += kd * diffuse * res->cDiffuse[1] * lightColor[1];
+        radiance[2] += kd * diffuse * res->cDiffuse[2] * lightColor[2];
     }
 }
 
@@ -226,7 +282,7 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
             vec3 color;
             //color_normal(color, res.normal);
 
-            phongLight(color, res.normal);
+            phongLight(color, &res);
             vec3_dup(radiance, color);
             break;
         } else {
