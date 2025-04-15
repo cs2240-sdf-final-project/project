@@ -124,6 +124,8 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
     for (int i = 0; i < 100; i++) {
         SceneSample res;
         scene_sample(current_position, params, &res);
+        // float directionalDeriv = directional_derivative(current_position, direction, params)
+
         if (res.distance < 1e-4f) {
             vec3 normal;
             get_normal_from(current_position, params, normal);
@@ -266,7 +268,7 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
 
     for (long ir = 0; ir < real->image_height; ir++) {
         if (ir % 50 == 0) {
-            printf("on row %ld\n", ir);
+            // printf("on row %ld\n", ir);
         }
         for (long ic = 0; ic < real->image_width; ic++) {
             float r = (float)ir;
@@ -308,6 +310,7 @@ int main(int argc, char *argv[]) {
     Image gradient = make_image(image_width, image_height);
 
     RandomState rng = make_random();
+
     render_image(&real, &gradient, &rng);
     image_write_bpm(&real, freal);
     image_write_bpm(&gradient, fgradient);

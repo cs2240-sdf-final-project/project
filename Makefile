@@ -9,10 +9,10 @@ run: build/a.exe
 	convert gradient.bpm gradient.png
 
 build/a.exe: build/output.ll
-	clang-16 $< $(FLAGS) -lm -o $@
+	clang++-16 $< $(FLAGS) -lm -lpng -o $@
 
 build/input.ll: src/hello.cpp
-	clang-16 $< -S -emit-llvm -o $@ $(FLAGS) 
+	clang-16 $< -S -emit-llvm -o $@ $(FLAGS)
 
 build/output.ll: build/input.ll
 	opt-16 $< --load-pass-plugin=$(LLVM_ENZYME) -passes=enzyme -o $@ -S
