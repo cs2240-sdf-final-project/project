@@ -2,3 +2,5 @@ build/*.ll
 build/*.exe
 .vscode
 *.bpm
+**/.DS_Store
+temp/*
