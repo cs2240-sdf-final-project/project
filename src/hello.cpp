@@ -134,21 +134,55 @@ float sdfSphere(const vec3 pos) {
     return vec3_len(displacement) - 3.5f;
 }
 
+static const int number_of_scene_params = 1;
 
-typedef struct {
-    float offset;
-} SceneParams;
+SceneParams *make_scene_params() {
+    SceneParams *out = (SceneParams *)calloc(sizeof(float), (size_t)number_of_scene_params);
+    assert(out);
+    return out;
+}
 
-static void params_from_float_pointer(const float *params, SceneParams *out) {
-    out->offset = params[0];
+void free_scene_params(SceneParams *params) {
+    free(params);
+}
+
+void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
+
+static inline SceneParams *params_from_float_pointer(const float *params) {
+    return (SceneParams *)params;
 }
 
 static const float *float_pointer_from_params(const SceneParams *out) {
     return &out->offset;
 }
 
-static inline void scene_params_fill_ones(SceneParams *params) {
-    params->offset = 1.f;
+static float *float_pointer_from_params(SceneParams *out) {
+    return &out->offset;
+}
+
+void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
+    float *raw_out_params = float_pointer_from_params(out_params);
+    const float *raw_a = float_pointer_from_params(a);
+    const float *raw_b = float_pointer_from_params(a);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = raw_a[i] + raw_b[i];
+    }
+}
+
+void scene_params_elementwise_mul(SceneParams *out_params, SceneParams *a, SceneParams *b) {
+    float *raw_out_params = float_pointer_from_params(out_params);
+    const float *raw_a = float_pointer_from_params(a);
+    const float *raw_b = float_pointer_from_params(a);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = raw_a[i] * raw_b[i];
+    }
+}
+
+void scene_params_fill(SceneParams *params, float fill_with) {
+    float *raw_out_params = float_pointer_from_params(params);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = fill_with;
+    }
 }
 
 typedef struct {
@@ -316,9 +350,8 @@ void search_for_critical_point(const vec3 origin, const vec3 direction, const Sc
 }
 
 float sdf_normal_wrapper(const vec3 pos, const float *params) {
-    SceneParams scene_params;
-    params_from_float_pointer(params, &scene_params);
-    return scene_sample_sdf(pos, &scene_params);
+    SceneParams* scene_params = params_from_float_pointer(params);
+    return scene_sample_sdf(pos, scene_params);
 }
 
 extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, const float *);
@@ -461,30 +494,100 @@ void render_get_radiance(
     }
 }
 
-void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const float *raw_params) {
-    SceneParams params;
-    params_from_float_pointer(raw_params, &params);
-    get_critical_point_along(radiance, origin, direction, &params, rng);
+// TODO: figure this shit out
+void render_get_radiance_wrapper(
+    vec3 radiance,
+    RandomState *rng,
+    const vec3 origin,
+    const vec3 direction,
+    const float *raw_params
+) {
+    SceneParams *params = params_from_float_pointer(raw_params);
+    get_critical_point_along(radiance, origin, direction, params, rng);
 }
 
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
 
-void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction, const SceneParams *params) {
+GradientImage make_gradient_image(long image_width, long image_height) {
+    const long num_subpixels = 3;
+
+    long num_floats = number_of_scene_params * image_width * image_height * num_subpixels;
+    float *buf = (float *)calloc(sizeof(float), num_floats);
+    assert(buf);
+
+    GradientStrides strides;
+    strides.parameter_stride = 1;
+    strides.subpixel_stride = number_of_scene_params;
+    strides.col_stride = number_of_scene_params * num_subpixels;
+    strides.row_stride = number_of_scene_params * num_subpixels * image_width;
+    GradientImage ret;
+    ret.strides = strides;
+    ret.image_height = image_height;
+    ret.image_width = image_width;
+    ret.num_subpixels = 3;
+    ret.buf = buf;
+
+    return ret;
+}
+
+void free_gradient_image(GradientImage *image) {
+    free(image);
+}
+
+static inline long gradient_image_get_index(const GradientStrides *s, long r, long c, long subpixel, long param) {
+    return r * s->row_stride + c * s->col_stride + subpixel * s->subpixel_stride + param * s->parameter_stride;
+}
+
+void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic) {
+    const SceneParams *ppcs[] = {ppc->r, ppc->g, ppc->b};
+    for (long subpixel = 0; subpixel < 3; subpixel++) {
+        const SceneParams *params = ppcs[subpixel];
+        const float *raw_params = float_pointer_from_params(params);
+        for (long p = 0; p < number_of_scene_params; p++) {
+            long index = gradient_image_get_index(&image->strides, ir, ic, subpixel, p);
+            image->buf[index] = raw_params[p];
+        }
+    }
+}
+
+void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic) {
+    SceneParams *ppcs[] = {ppc->r, ppc->g, ppc->b};
+    for (long subpixel = 0; subpixel < 3; subpixel++) {
+        SceneParams *params = ppcs[subpixel];
+        float *raw_params = float_pointer_from_params(params);
+        for (long p = 0; p < number_of_scene_params; p++) {
+            long index = gradient_image_get_index(&image->strides, ir, ic, subpixel, p);
+            raw_params[p] = image->buf[index];
+        }
+    }
+}
+
+/** TODO: make the output shape correct */
+void render_get_gradient_helper(
+    vec3 real_rgb,
+    // derivative of the radiance with respect to each input
+    SceneParamsPerChannel *params_per_channel,
+    RandomState *rng,
+    const vec3 origin,
+    const vec3 direction,
+    // the values of the input parameters
+    const SceneParams *params
+) {
     const float *raw_params = float_pointer_from_params(params);
 
-    SceneParams d_params;
-    scene_params_fill_ones(&d_params);
+    scene_params_fill(params_per_channel->r, 1.f);
+    scene_params_fill(params_per_channel->b, 1.f);
+    scene_params_fill(params_per_channel->g, 1.f);
+
     const float *d_raw_params = float_pointer_from_params(&d_params);
 
-    vec3 radiance;
-    vec3_set(radiance, 1.f);
     vec3 d_radiance;
     vec3_set(d_radiance, 1.f);
 
     // Calculate radiance with autodiff
     __enzyme_fwddiff_radiance(
         (void*)render_get_radiance_wrapper,
-        enzyme_dup, radiance, d_radiance,
+        enzyme_dup, real_rgb, d_radiance,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
@@ -604,7 +707,8 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
     }
 }
 
-void render_image(Image *real, Image *gradient, RandomState *rng, SceneParams *params) {
+/** TODO: this output shape should be correct */
+void render_image(Image *real, Image *gradient, RandomState *rng, const SceneParams *params) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;

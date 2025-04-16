@@ -24,7 +24,7 @@ float mse_loss(Image *real, Image *groundtruth) {
     return loss;
 }
 
-float mse_loss_deriv(Image *real, Image *groundtruth, Image *gradient) {
+void mse_loss_deriv(Image *real, Image *groundtruth, Image *gradient, SceneParams *loss_deriv) {
     float deriv = 0.f;
     float count = 0.f;
     for (long ir = 0; ir < real->image_height; ir++) {
@@ -54,9 +54,14 @@ float mse_loss_deriv(Image *real, Image *groundtruth, Image *gradient) {
     return deriv;
 }
 
-void gradient_step(float *param, float deriv, float learning_rate = 500.f) {
+void gradient_step(SceneParams *params, const SceneParams *deriv, float learning_rate = 500.f) {
     // TODO: implement a better optimizer like Adam or something
-    *param = *param - learning_rate * deriv;
+    // *param = *param - learning_rate * deriv;
+    SceneParams *scratch = make_scene_params();
+    scene_params_fill(scratch, -learning_rate);
+    scene_params_elementwise_mul(scratch, scratch, deriv);
+    scene_params_elementwise_add(params, params, scratch);
+    free_scene_params(scratch);
 }
 
 int main(int argc, char *argv[]) {
@@ -73,21 +78,26 @@ int main(int argc, char *argv[]) {
     Image groundtruth = make_image(image_width, image_height);
     image_read_bpm(&groundtruth, fgroundtruth);
 
-    float param = 0.1f;
+    SceneParams *params = make_scene_params();
+    params->offset = 0.1f;
+    SceneParams *loss_deriv = make_scene_params();
+
     const int num_epochs = 20;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
         RandomState rng = make_random();
-        render_image(&real, &gradient, &rng, param); // calculate radiance and gradients
+        render_image(&real, &gradient, &rng, &params); // calculate radiance and gradients
 
         // Compute loss and derivative of loss
         float loss = mse_loss(&real, &groundtruth);
-        float loss_deriv = mse_loss_deriv(&real, &groundtruth, &gradient);
+        mse_loss_deriv(&real, &groundtruth, &gradient, loss_deriv);
+
         printf("loss: %f\n", loss);
-        printf("deriv: %f\n", loss_deriv);
+        // printf("deriv: %f\n", loss_deriv); // TODO: print this struct
 
         // Gradient step
-        gradient_step(&param, loss_deriv);
-        printf("param: %f\n", param);
+        gradient_step(params, loss_deriv, 500.0f);
+
+        // printf("param: %f\n", param);
 
         // Write each frame to a file
         char fn_real[256];
@@ -99,6 +109,9 @@ int main(int argc, char *argv[]) {
         image_write_bpm(&real, freal);
         image_write_bpm(&gradient, fgradient);
     }
+
+    free_scene_params(loss_deriv);
+    free_scene_params(params);
     free_image(&real);
     free_image(&gradient);
     free_image(&groundtruth);

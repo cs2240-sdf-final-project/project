@@ -11,8 +11,11 @@ int main(int argc, char *argv[]) {
     Image real = make_image(image_width, image_height);
     Image gradient = make_image(image_width, image_height);
 
+    SceneParams params;
+    params.offset = 0.1f;
+
     RandomState rng = make_random();
-    render_image(&real, &gradient, &rng);
+    render_image(&real, &gradient, &rng, &params);
     image_write_bpm(&real, freal);
     image_write_bpm(&gradient, fgradient);
     free_image(&real);

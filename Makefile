@@ -6,19 +6,19 @@ build: build/debug.exe build/descent.exe
 run: run-debug run-descent
 
 run-debug: build/debug.exe
-    build/debug.exe
+	build/debug.exe
 	convert real.ppm real.png
 	convert gradient.ppm gradient.png
 
 run-descent: build/descent.exe
-    build/descent.exe
+	build/descent.exe
 	convert -delay 10 -loop 1 $(shell echo temp/real_*.ppm) real.gif
 	convert -delay 10 -loop 1 $(shell echo temp/gradient_*.ppm) gradient.gif
 
-build/debug.exe: build/debug.cpp build/hello.o
+build/debug.exe: src/debug.cpp build/hello.o
 	clang-16 $< $(FLAGS) -o $@
 
-build/descent.exe: build/descent.cpp build/hello.o
+build/descent.exe: src/descent.cpp build/hello.o
 	clang-16 $< $(FLAGS) -o $@
 
 build/hello.o: build/output.ll
