@@ -80,6 +80,7 @@ void vec2_abs(vec2 out, const vec2 in) {
     }
 }
 
+
 float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
     xz[0] = pos[0];
@@ -179,10 +180,25 @@ void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a,
     }
 }
 
+void get_boundary_integral(SceneParamsPerChannel *ppc, const SceneParams *params, const vec3 rgb) {
+    const float *raw_params = float_pointer_from_params(params);
+    for (int c = 0; c < 3; c++) {
+        float *pc = float_pointer_from_params(ppc->rgb[c]);
+        for (int i = 0; i < number_of_scene_params; i++) {
+            pc[i] += raw_params[i] * rgb[c];
+        }
+    }
+}
+
+// void vecX3_add(SceneParamsPerChannel *ppc, const SceneParamsPerChannel *a, const SceneParamsPerChannel *b) {
+//     for (int c = 0; c < 3; c++) {
+//         scene_params_elementwise_add(ppc->rgb[c], a->rgb[c], b->rgb[c]);
+//     }
+// }
+
 void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by) {
     float *raw_out_params = float_pointer_from_params(out_params);
     const float *raw_a = float_pointer_from_params(a);
-    const float *raw_b = float_pointer_from_params(b);
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_out_params[i] = raw_a[i] * scale_by;
     }
@@ -565,7 +581,7 @@ extern void __enzyme_autodiff_radiance(
 );
 
 void render_pixel(
-    vec3 real,
+    vec3 radiance,
     const vec3 origin,
     const vec3 direction,
     SceneParamsPerChannel *params_per_channel,
@@ -582,7 +598,7 @@ void render_pixel(
         raw_out_params[c] = float_pointer_from_params(params_per_channel->rgb[c]);
     }
 
-    vec3 radiance;
+    
     // Calculate radiance with autodiff
     // __enzyme_autodiff_radiance(
     //     (void*)render_get_radiance_wrapper,
@@ -595,6 +611,10 @@ void render_pixel(
     //     enzyme_dup, &radiance[BLUE], raw_out_params[BLUE]
     // );
 
+    for(int i = 0; i < 3; i++){
+        
+    }
+
     if(critical_point.found_critical_point) {
         vec3 y_star;
         ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
@@ -606,21 +626,19 @@ void render_pixel(
         vec3 y_star_radiance;
         phongLight(y_star_radiance, direction, normal, &sample);
 
-        // SceneParams* paramOut;
+        SceneParams* paramOut;
 
-        // diff_sdf(y_star, paramOut, params);
+        diff_sdf(y_star, paramOut, params);
 
-        // vec3 deltaL;
-        // vec3_sub(deltaL, y_star_radiance, radiance);
+        vec3 deltaL;
+        vec3_sub(deltaL, y_star_radiance, radiance);
+        vec3_scale(deltaL, deltaL, 1 / distance_threshold);
 
-        // vec3 boundary_integral;
-        // vec3_set(boundary_integral, 0.0f);
-        // TODO: figure this out with the matrix multiply
-        // vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
-
-        // vec3_add(d_radiance, d_radiance, boundary_integral);
+        get_boundary_integral(params_per_channel , paramOut , deltaL);
     }
 }
+
+
 
 long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
