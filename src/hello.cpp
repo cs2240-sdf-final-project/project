@@ -415,11 +415,12 @@ void get_critical_point_along(
         get_normal_from(normal, current_position, params);
         phongLight(radiance, direction, normal, &sample);
     } else {
-        vec3 red = {1.0f, 0.0f, 0.0f};
+        // uncomment for debug colors
+        // vec3 red = {1.0f, 0.0f, 0.0f};
         vec3 black = {0.0f, 0.0f, 0.0f};
         float *which;
         if (critical_point.found_critical_point) {
-            which = red;
+            which = black; // make this red for debug colors
         } else {
             which = black;
         }
@@ -427,7 +428,13 @@ void get_critical_point_along(
     }
 }
 
-void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const SceneParams *params) {
+void render_get_radiance(
+    vec3 radiance,
+    const vec3 origin,
+    const vec3 direction,
+    const SceneParams *params,
+    RandomState *rng
+) {
     vec3_set(radiance, 0.0);
     vec3 current_position;
     vec3_dup(current_position, origin);
@@ -449,7 +456,7 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
 void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const float *raw_params) {
     SceneParams params;
     params_from_float_pointer(raw_params, &params);
-    render_get_radiance(radiance, rng, origin, direction, &params);
+    get_critical_point_along(radiance, origin, direction, &params, rng);
 }
 
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
@@ -475,23 +482,6 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
 
     vec3_dup(real, radiance);
     vec3_dup(gradient, d_radiance);
-}
-
-
-
-void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    vec3_set(out_real, 0.f);
-    vec3_set(out_gradient, 0.f);
-    int count = 1;
-    for (int i = 0; i < count; i++) {
-        vec3 real;
-        vec3 gradient;
-        render_get_gradient_helper(real, gradient, rng, origin, direction);
-        vec3_add(out_real, out_real, real);
-        vec3_add(out_gradient, out_gradient, gradient);
-    }
-    vec3_scale(out_real, out_real, 1.f / (float)count);
-    vec3_scale(out_gradient, out_gradient, 1.f / (float)count);
 }
 
 typedef struct {
@@ -596,17 +586,11 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
-            // render_get_gradient_wrapper(out_real, out_gradient, rng, camera_position, direction);
-            // vec3_set(out_gradient, 0.0);
-            // SceneParams params;
-            // params.offset = 0.1f;
-            // get_critical_point_along(out_real, camera_position, direction, &params, rng);
             vec3 out_real;
             vec3 out_gradient;
-            vec3_set(out_gradient, 0.0);
             SceneParams params;
-            params.offset = 0.1f;
-            get_critical_point_along(out_real, camera_position, direction, &params, rng);
+            params.offset = 0.0f;
+            render_get_gradient_helper(out_real, out_gradient, rng, camera_position, direction);
 
             image_set(real, ir, ic, out_real);
             vec3_scale(out_gradient, out_gradient, 0.5);
