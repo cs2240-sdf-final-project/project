@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <assert.h>
 #include <cctype>
+#include <math.h>
 #include "linmath.h"
-#include "sim_random.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -149,8 +149,6 @@ void free_scene_params(SceneParams *params) {
     free(params);
 }
 
-void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
-
 static inline SceneParams *params_from_float_pointer(const float *params) {
     return (SceneParams *)params;
 }
@@ -181,6 +179,14 @@ void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a,
     }
 }
 
+void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by) {
+    float *raw_out_params = float_pointer_from_params(out_params);
+    const float *raw_a = float_pointer_from_params(a);
+    const float *raw_b = float_pointer_from_params(b);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = raw_a[i] * scale_by;
+    }
+}
 void scene_params_fill(SceneParams *params, float fill_with) {
     float *raw_out_params = float_pointer_from_params(params);
     for (int i = 0; i < number_of_scene_params; i++) {
@@ -228,6 +234,7 @@ static inline void object_foreground_capsule(const vec3 pos, const SceneParams *
 }
 
 static inline void object_foreground(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     sample->distance = sdfVerticalCapsule(pos, 2.0, 1.0);
     vec3_set(sample->diffuse, 1.0f);
     vec3_set(sample->specular, 0.1f);
@@ -427,7 +434,6 @@ void get_critical_point_along(
     const vec3 origin,
     const vec3 direction,
     const SceneParams *params,
-    RandomState *rng,
     SearchResult *critical_point
 ) {
     // we take steps at most this size in order to avoid missing
@@ -530,7 +536,6 @@ inline void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *
 
 // TODO: figure this shit out
 void render_get_radiance_wrapper(
-    RandomState *rng,
     const vec3 origin,
     const vec3 direction,
     const float *raw_params,
@@ -541,7 +546,7 @@ void render_get_radiance_wrapper(
 ) {
     const SceneParams *params = params_from_float_pointer(raw_params);
     vec3 radiance;
-    get_critical_point_along(radiance, origin, direction, params, rng, critical_point);
+    get_critical_point_along(radiance, origin, direction, params, critical_point);
     float *rgb[3] = {red, green, blue};
     for (int i = 0; i < 3; i++) {
         *rgb[i] = radiance[i];
@@ -550,7 +555,6 @@ void render_get_radiance_wrapper(
 
 extern void __enzyme_autodiff_radiance(
     void *,
-    int, RandomState *,
     int, const float *,
     int, const float *,
     int, const float *,
@@ -562,7 +566,6 @@ extern void __enzyme_autodiff_radiance(
 
 void render_pixel(
     vec3 real,
-    RandomState *rng,
     const vec3 origin,
     const vec3 direction,
     SceneParamsPerChannel *params_per_channel,
@@ -581,17 +584,16 @@ void render_pixel(
 
     vec3 radiance;
     // Calculate radiance with autodiff
-    __enzyme_autodiff_radiance(
-        (void*)render_get_radiance_wrapper,
-        enzyme_const, rng,
-        enzyme_const, origin,
-        enzyme_const, direction,
-        enzyme_out, raw_params,
-        enzyme_const, &critical_point,
-        enzyme_dup, &radiance[RED], raw_out_params[RED],
-        enzyme_dup, &radiance[GREEN], raw_out_params[GREEN],
-        enzyme_dup, &radiance[BLUE], raw_out_params[BLUE]
-    );
+    // __enzyme_autodiff_radiance(
+    //     (void*)render_get_radiance_wrapper,
+    //     enzyme_const, origin,
+    //     enzyme_const, direction,
+    //     enzyme_out, raw_params,
+    //     enzyme_const, &critical_point,
+    //     enzyme_dup, &radiance[RED], raw_out_params[RED],
+    //     enzyme_dup, &radiance[GREEN], raw_out_params[GREEN],
+    //     enzyme_dup, &radiance[BLUE], raw_out_params[BLUE]
+    // );
 
     if(critical_point.found_critical_point) {
         vec3 y_star;
@@ -604,15 +606,15 @@ void render_pixel(
         vec3 y_star_radiance;
         phongLight(y_star_radiance, direction, normal, &sample);
 
-        SceneParams* paramOut;
+        // SceneParams* paramOut;
 
-        diff_sdf(y_star, paramOut, params);
+        // diff_sdf(y_star, paramOut, params);
 
-        vec3 deltaL;
-        vec3_sub(deltaL, y_star_radiance, radiance);
+        // vec3 deltaL;
+        // vec3_sub(deltaL, y_star_radiance, radiance);
 
-        vec3 boundary_integral;
-        vec3_set(boundary_integral, 0.0f);
+        // vec3 boundary_integral;
+        // vec3_set(boundary_integral, 0.0f);
         // TODO: figure this out with the matrix multiply
         // vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
 
@@ -731,7 +733,7 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
 }
 
 /** TODO: this output shape should be correct */
-void render_image(Image *real, GradientImage *gradient, RandomState *rng, const SceneParams *params) {
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
@@ -780,7 +782,7 @@ void render_image(Image *real, GradientImage *gradient, RandomState *rng, const 
 
             // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            render_pixel(out_real, rng, camera_position, direction, &ppc, params);
+            render_pixel(out_real, camera_position, direction, &ppc, params);
 
             image_set(real, ir, ic, out_real);
             gradient_image_set(&ppc, gradient, ir, ic);

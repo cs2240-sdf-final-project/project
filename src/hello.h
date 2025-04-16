@@ -3,7 +3,6 @@
 
 #include <stdio.h>
 #include "linmath.h"
-#include "sim_random.h"
 
 typedef struct {
     float offset;
@@ -27,6 +26,7 @@ SceneParams *make_scene_params();
 void free_scene_params(SceneParams *params);
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
 void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
+void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by);
 void scene_params_fill(SceneParams *params, float fill_with);
 
 void params_increment(SceneParams &params);
@@ -36,7 +36,6 @@ int image_read_bpm(Image *image, FILE *f);
 void image_write_bpm(Image *image, FILE *f);
 void image_set(Image *image, long ir, long ic, const vec3 radiance);
 void image_get(vec3 radiance, Image *image, long ir, long ic);
-void render_image(Image *real, Image *gradient, RandomState *rng, const SceneParams *params);
 
 const int RED = 0;
 const int GREEN = 1;
@@ -64,6 +63,8 @@ typedef struct {
 GradientImage make_gradient_image(long image_width, long image_height);
 void free_gradient_image(GradientImage *image);
 void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic);
-void gradient_image_get(SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic);
+void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic);
+
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params);
 
 #endif // HELLO_H

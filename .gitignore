@@ -1,5 +1,7 @@
 build/*.ll
 build/*.exe
+build/*.o
+
 
 .vscode
 *.bpm

@@ -1,5 +1,5 @@
 LLVM_ENZYME=/usr/local/src/Enzyme/enzyme/build/Enzyme/LLVMEnzyme-16.so
-FLAGS=-O3 -g -Wall -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion
+FLAGS=-O3 -g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion
 
 build: build/debug.exe build/descent.exe
 
@@ -16,19 +16,19 @@ run-descent: build/descent.exe
 	convert -delay 10 -loop 1 $(shell echo temp/gradient_*.ppm) gradient.gif
 
 build/debug.exe: src/debug.cpp build/hello.o
-	clang-16 $< $(FLAGS) -o $@
+	clang-16 $^ $(FLAGS) -lm -o $@
 
 build/descent.exe: src/descent.cpp build/hello.o
-	clang-16 $< $(FLAGS) -o $@
+	clang-16 $^ $(FLAGS) -lm -o $@
 
 build/hello.o: build/output.ll
-	clang-16 $< $(FLAGS) -lm -o $@
+	clang-16 -c $^ $(FLAGS) -lm -o $@
 
 build/input.ll: src/hello.cpp
-	clang-16 $< -S -emit-llvm -o $@ $(FLAGS)
+	clang-16 $^ -S -emit-llvm -o $@ $(FLAGS)
 
 build/output.ll: build/input.ll
-	opt-16 $< --load-pass-plugin=$(LLVM_ENZYME) -passes=enzyme -o $@ -S
+	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) -passes=enzyme -o $@ -S
 
 clean:
 	rm -f build/*.ll build/*.exe build/*.o
