@@ -9,6 +9,7 @@ int enzyme_dup;
 int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
+const float distance_threshold = 2e-1f;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -69,6 +70,12 @@ void vec3_set(vec3 out, float value) {
 void vec2_abs(vec2 out, const vec2 in) {
     for (int i = 0; i < 2; i++) {
         out[i] = fabsf(in[i]);
+    }
+}
+
+void vec3_substract(vec3 out, vec3 in1, vec3 in2 ) {
+    for (int i = 0; i < 2; i++) {
+        out[i] = in1[i] - in2[i];
     }
 }
 
@@ -139,6 +146,10 @@ void params_from_float_pointer(const float *params, SceneParams *out) {
 }
 
 const float *float_pointer_from_params(const SceneParams *out) {
+    return &out->offset;
+}
+
+float *float_pointer_from_params_nonconst(SceneParams *out) {
     return &out->offset;
 }
 
@@ -283,7 +294,7 @@ void search_for_critical_point(const vec3 origin, const vec3 direction, const Sc
     ret->found_critical_point = false;
     ret->t_if_found_critical_point = 0.0;
     // width of the scene band
-    const float distance_threshold = 2e-1f;
+    
     // we consider directional derivatives this large to be zero
     const float directional_derivative_threshold = 1e-1f;
     // we will bisect this many iterations in order to find the true location of the minimum directional derivative
@@ -369,7 +380,8 @@ void get_critical_point_along(
     const vec3 origin,
     const vec3 direction,
     const SceneParams *params,
-    RandomState *rng
+    RandomState *rng,
+    SearchResult *critical_point
 ) {
     // we take steps at most this size in order to avoid missing
     // sign changes in the directional derivatives
@@ -380,19 +392,16 @@ void get_critical_point_along(
     const float contact_threshold = 1e-4f;
     float t = 0.0;
     float previous_t = 0.0;
-    SearchResult critical_point = { false, 0.0 };
+    critical_point->found_critical_point = false;
     IntersectionResult intersection = { false, 0.0 };
     for (int i = 0; i < number_of_steps; i++) {
         float dir_previous_t = directional_derivative(origin, direction, previous_t, params);
         float dir_t = directional_derivative(origin, direction, t, params);
         // look for a sign change in the directional derivative
-        if (!critical_point.found_critical_point && ((dir_previous_t < 0) && (dir_t > 0))) {
-            // let's try to find critical_point between t and previous_t
-            SearchResult local_res;
-            search_for_critical_point(origin, direction, params, previous_t, t, &local_res);
-            if (local_res.found_critical_point) {
-                critical_point = local_res;
-            }
+        if (!critical_point->found_critical_point && ((dir_previous_t < 0) && (dir_t > 0))) {
+            // let's try to find critical_point between t and previous_t;
+            search_for_critical_point(origin, direction, params, previous_t, t, critical_point);
+            
         }
         vec3 pos;
         ray_step(pos, origin, direction, t);
@@ -417,14 +426,14 @@ void get_critical_point_along(
     } else {
         // uncomment for debug colors
         // vec3 red = {1.0f, 0.0f, 0.0f};
-        vec3 black = {0.0f, 0.0f, 0.0f};
-        float *which;
-        if (critical_point.found_critical_point) {
-            which = black; // make this red for debug colors
-        } else {
-            which = black;
-        }
-        vec3_dup(radiance, which);
+        // vec3 black = {0.0f, 0.0f, 0.0f};
+        // float *which;
+        // if (critical_point.found_critical_point) {
+        //     which = black; // make this red for debug colors
+        // } else {
+        //     which = black;
+        // }
+        //vec3_dup(radiance, which);
     }
 }
 
@@ -459,9 +468,9 @@ void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 ori
     get_critical_point_along(radiance, origin, direction, &params, rng);
 }
 
-extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
+extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *, int , SearchResult *);
 
-void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
+void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction, SearchResult *critical_point) {
     SceneParams params;
     params.offset = 0.1f;
     const float *raw_params = float_pointer_from_params(&params);
@@ -478,10 +487,68 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_dupnoneed, raw_params, &d_param);
+        enzyme_dupnoneed, raw_params, &d_param, 
+        enzyme_const, critical_point);
+
+    //get normal velocity and compute the radiance of y star
+
+    
+
+    if(critical_point->found_critical_point){
+
+
+        
+        vec3 y_star_radiance;
+        vec3 y_star;
+        vec3_set(y_star_radiance, 1.0f);
+        ray_step(y_star, origin, direction, critical_point->t_if_found_critical_point);
+        SdfResult sample;
+        scene_sample(y_star, &params, &sample);
+        vec3 normal;
+        get_normal_from(normal, y_star, &params);
+        phongLight(y_star_radiance, direction, normal, &sample);
+
+        SceneParams* paramOut;
+
+        diff_sdf(y_star, paramOut, &params);
+
+        vec3 deltaL;
+        vec3_sub(deltaL, y_star_radiance, radiance);
+
+        vec3 boundary_integral;
+        vec3_set(boundary_integral, 0.0f);
+        vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
+
+        vec3_add(d_radiance, d_radiance, boundary_integral);
+        
+
+
+    }
 
     vec3_dup(real, radiance);
     vec3_dup(gradient, d_radiance);
+
+}
+
+float sdf_theta_wrapper(const vec3 pos, const float *params) {
+    SceneParams scene_params;
+    params_from_float_pointer(params, &scene_params);
+    return scene_sample_sdf(pos, &scene_params);
+}
+
+extern void __enzyme_autodiff_theta(void *, int,const float *, int, const float *, float *);
+
+void diff_sdf(const vec3 pos, SceneParams *paramsOut,const SceneParams *paramsIn) {
+    
+
+    const float *raw_params = float_pointer_from_params(paramsIn);
+    float* draw_params = float_pointer_from_params_nonconst(paramsOut);
+    __enzyme_autodiff_theta(
+        (void*)sdf_theta_wrapper,
+        enzyme_const, pos,
+        enzyme_dup, raw_params, draw_params
+    );
+
 }
 
 typedef struct {
