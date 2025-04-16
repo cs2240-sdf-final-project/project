@@ -74,6 +74,11 @@ void vec3_set(vec3 out, float value) {
     vec3_dup(out, to_set);
 }
 
+void vec3_set(vec3 out, float v1, float v2, float v3) {
+    vec3 to_set = { v1, v2, v3 };
+    vec3_dup(out, to_set);
+}
+
 void vec2_abs(vec2 out, const vec2 in) {
     for (int i = 0; i < 2; i++) {
         out[i] = fabsf(in[i]);
@@ -240,35 +245,73 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
     destination->shininess = b->shininess;
 }
 
-static inline void object_foreground_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    vec3 offset = {-1.0, 1.0, 6.0};
-    offset[0] += params->offset;
-    vec3 pos1;
-    vec3_add(pos1, pos, offset);
-    sample->distance = sdfCylinder(pos1, 1.0f, 2.0f);
-    vec3_set(sample->ambient, 0.1f);
-    vec3 cDiffuse = {0.3f, 0.5f, 0.8f};
-    vec3_dup(sample->diffuse, cDiffuse);
-}
-
 static inline void object_foreground(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    (void)params;
-    sample->distance = sdfVerticalCapsule(pos, 2.0, 1.0);
-    vec3_set(sample->diffuse, 1.0f);
-    vec3_set(sample->specular, 0.1f);
+    sample->distance = sdfVerticalCapsule(pos, 0.7f, 0.4f);
+    vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
+}
+// Back:
+static inline void object_backwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 plane_normal = {0.0, 0.0, 1.0};
+    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->specular, 0.4f);
+}
+// Ceiling:
+static inline void object_topwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 plane_normal = {0.0, 1.0, 0.0};
+    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->specular, 0.4f);
+}
+// Left:
+static inline void object_leftwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 plane_normal = {1.0, 0.0, 0.0};
+    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
+    vec3_set(sample->diffuse, 0.63f, 0.065f, 0.05f);
+    vec3_set(sample->specular, 0.4f);
+}
+// Right:
+static inline void object_rightwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 plane_normal = {-1.0, 0.0, 0.0};
+    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    vec3_set(sample->ambient, 0.14f, 0.45f, 0.091f);
+    vec3_set(sample->diffuse, 0.14f, 0.45f, 0.091f);
+    vec3_set(sample->specular, 0.4f);
+}
+// Floor:
+static inline void object_bottomwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 plane_normal = {0.0, -1.0, 0.0};
+    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->specular, 0.4f);
 }
 
 inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *sample) {
     default_scene_sample(sample);
-
     SdfResult working;
-
-    default_scene_sample(&working);
-    object_foreground_capsule(pos, params, &working);
-    compose_scene_sample(sample, &working);
-
     default_scene_sample(&working);
     object_foreground(pos, params, &working);
+    compose_scene_sample(sample, &working);
+    default_scene_sample(&working);
+    object_backwall(pos, params, &working);
+    compose_scene_sample(sample, &working);
+    default_scene_sample(&working);
+    object_topwall(pos, params, &working);
+    compose_scene_sample(sample, &working);
+    default_scene_sample(&working);
+    object_leftwall(pos, params, &working);
+    compose_scene_sample(sample, &working);
+    default_scene_sample(&working);
+    object_rightwall(pos, params, &working);
+    compose_scene_sample(sample, &working);
+    default_scene_sample(&working);
+    object_bottomwall(pos, params, &working);
     compose_scene_sample(sample, &working);
 }
 
@@ -412,14 +455,14 @@ void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsI
 
 void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
     float lightColors[3][3] = {
-        {1.0f, 0.0f, 0.0f},
-        {0.0f, 1.0f, 0.0f},
-        {0.0f, 0.0f, 1.0f},
+        {.8f, .8f, .8f},
+        {.2f, .2f, .2f},
+        {.2f, .2f, .2f},
     };
     float lightDirections[3][3] = {
-        {-3.f, 0.f, -2.f},
+        {0.f, -1.f, 0.f},
         {-3.f, 2.f, 0.f},
-        {0.f, 2.f, 3.f},
+        {0.f, -1.f, 3.f},
     };
     float kd = 0.5;
     float ks = 1.0;
@@ -785,8 +828,8 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
-    float y_fov = 1.0f;
-    vec3 camera_position = {-10.0, 0.0, 10.0};
+    float y_fov = 0.785f;
+    vec3 camera_position = {0.f, 0.f, 3.6f};
     vec3 center = {0};
     vec3 up = {0.0, 1.0, 0.0};
 
