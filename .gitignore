@@ -1,4 +1,13 @@
 build/*.ll
 build/*.exe
+
 .vscode
+<<<<<<< HEAD
 *.bpm
+=======
+
+.DS_Store
+**/.DS_Store
+
+temp/*
+>>>>>>> grad-descent

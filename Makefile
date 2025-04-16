@@ -1,21 +1,36 @@
 LLVM_ENZYME=/usr/local/src/Enzyme/enzyme/build/Enzyme/LLVMEnzyme-16.so
 FLAGS=-O3 -g -Wall -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion
 
-build: build/a.exe
+build: build/debug.exe build/descent.exe
 
-run: build/a.exe
-	build/a.exe
-	convert real.bpm real.png
-	convert gradient.bpm gradient.png
+run: run-debug run-descent
 
-build/a.exe: build/output.ll
+run-debug: build/debug.exe
+    build/debug.exe
+	convert real.ppm real.png
+	convert gradient.ppm gradient.png
+
+run-descent: build/descent.exe
+    build/descent.exe
+	convert -delay 10 -loop 1 $(shell echo temp/real_*.ppm) real.gif
+	convert -delay 10 -loop 1 $(shell echo temp/gradient_*.ppm) gradient.gif
+
+build/debug.exe: build/debug.cpp build/hello.o
+	clang-16 $< $(FLAGS) -o $@
+
+build/descent.exe: build/descent.cpp build/hello.o
+	clang-16 $< $(FLAGS) -o $@
+
+build/hello.o: build/output.ll
 	clang-16 $< $(FLAGS) -lm -o $@
 
 build/input.ll: src/hello.cpp
-	clang-16 $< -S -emit-llvm -o $@ $(FLAGS) 
+	clang-16 $< -S -emit-llvm -o $@ $(FLAGS)
 
 build/output.ll: build/input.ll
 	opt-16 $< --load-pass-plugin=$(LLVM_ENZYME) -passes=enzyme -o $@ -S
 
 clean:
-	rm -f build/*.ll build/*.exe
+	rm -f build/*.ll build/*.exe build/*.o
+
+.PHONY: build run run-descent run-debug clean

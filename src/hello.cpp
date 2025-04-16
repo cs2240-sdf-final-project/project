@@ -2,8 +2,13 @@
 #include <stdio.h>
 #include <stdio.h>
 #include <assert.h>
+#include <cctype>
 #include "linmath.h"
 #include "sim_random.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include "hello.h"
 
 int enzyme_dup;
 int enzyme_dupnoneed;
@@ -134,12 +139,16 @@ typedef struct {
     float offset;
 } SceneParams;
 
-void params_from_float_pointer(const float *params, SceneParams *out) {
+static void params_from_float_pointer(const float *params, SceneParams *out) {
     out->offset = params[0];
 }
 
-const float *float_pointer_from_params(const SceneParams *out) {
+static const float *float_pointer_from_params(const SceneParams *out) {
     return &out->offset;
+}
+
+static inline void scene_params_fill_ones(SceneParams *params) {
+    params->offset = 1.f;
 }
 
 typedef struct {
@@ -180,7 +189,6 @@ static inline void object_foreground_capsule(const vec3 pos, const SceneParams *
     vec3 cDiffuse = {0.3f, 0.5f, 0.8f};
     vec3_dup(sample->diffuse, cDiffuse);
 }
-
 
 static inline void object_foreground(const vec3 pos, const SceneParams *params, SdfResult *sample) {
     sample->distance = sdfVerticalCapsule(pos, 2.0, 1.0);
@@ -461,46 +469,86 @@ void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 ori
 
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
 
-void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    SceneParams params;
-    params.offset = 0.1f;
-    const float *raw_params = float_pointer_from_params(&params);
-    float d_param = 1.0f;
+void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction, const SceneParams *params) {
+    const float *raw_params = float_pointer_from_params(params);
+
+    SceneParams d_params;
+    scene_params_fill_ones(&d_params);
+    const float *d_raw_params = float_pointer_from_params(&d_params);
 
     vec3 radiance;
     vec3_set(radiance, 1.f);
     vec3 d_radiance;
     vec3_set(d_radiance, 1.f);
 
+    // Calculate radiance with autodiff
     __enzyme_fwddiff_radiance(
         (void*)render_get_radiance_wrapper,
         enzyme_dup, radiance, d_radiance,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_dupnoneed, raw_params, &d_param);
+        enzyme_dupnoneed, raw_params, d_raw_params);
 
     vec3_dup(real, radiance);
     vec3_dup(gradient, d_radiance);
 }
 
-typedef struct {
-    long row_stride;
-    long col_stride;
-    long subpixel_stride;
-} Strides;
-
 long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
 }
 
-typedef struct {
-    Strides strides;
-    long image_width;
-    long image_height;
-    long num_bytes;
-    char *buf;
-} Image;
+//////////////////////////////////////
+// Begin PPM Parser from ChatGPT /////
+void skip_whitespace_and_comments(FILE *f) {
+    int c;
+    while ((c = fgetc(f)) != EOF) {
+        if (c == '#') {
+            // Skip the comment line
+            while ((c = fgetc(f)) != '\n' && c != EOF);
+        } else if (!isspace(c)) {
+            ungetc(c, f);
+            break;
+        }
+    }
+}
+int image_read_bpm(Image *image, FILE *f) {
+    char header[3];
+    if (fscanf(f, "%2s", header) != 1 || strcmp(header, "P6") != 0) {
+        fprintf(stderr, "Unsupported or invalid PPM format\n");
+        return 0;
+    }
+    skip_whitespace_and_comments(f);
+    if (fscanf(f, "%ld", &image->image_width) != 1) return 0;
+
+    skip_whitespace_and_comments(f);
+    if (fscanf(f, "%ld", &image->image_height) != 1) return 0;
+
+    skip_whitespace_and_comments(f);
+    int maxval;
+    if (fscanf(f, "%d", &maxval) != 1 || maxval != 255) {
+        fprintf(stderr, "Unsupported max color value (only 255 supported)\n");
+        return 0;
+    }
+    // Skip the single whitespace character after maxval
+    fgetc(f);
+    image->num_bytes = image->image_width * image->image_height * 3;
+    image->buf = (char *)malloc((size_t)image->num_bytes);
+    if (!image->buf) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return 0;
+    }
+    size_t bytes_read = fread(image->buf, 1, (size_t)image->num_bytes, f);
+    if (bytes_read != (size_t)image->num_bytes) {
+        fprintf(stderr, "Failed to read image data\n");
+        free(image->buf);
+        image->buf = NULL;
+        return 0;
+    }
+    return 1; // success
+}
+// End PPM Parser from ChatGPT ///////
+//////////////////////////////////////
 
 Image make_image(long image_width, long image_height) {
     Image image;
@@ -544,7 +592,19 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     }
 }
 
-void render_image(Image *real, Image *gradient, RandomState *rng) {
+void image_get(vec3 radiance, Image *image, long ir, long ic) {
+    assert(ir >= 0);
+    assert(ir < image->image_height);
+    assert(ic >= 0);
+    assert(ic < image->image_width);
+    for (long p = 0; p < 3; p++) {
+        long index = get_index(&image->strides, ir, ic, p);
+        char value = image->buf[index];
+        radiance[p] = (float)value / 255.f;
+    }
+}
+
+void render_image(Image *real, Image *gradient, RandomState *rng, SceneParams *params) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
@@ -566,9 +626,9 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
     mat4x4_invert(world_from_camera, projection_view);
 
     for (long ir = 0; ir < real->image_height; ir++) {
-        if (ir % 50 == 0) {
-            printf("on row %ld\n", ir);
-        }
+        // if (ir % 50 == 0) {
+        //     printf("on row %ld\n", ir);
+        // }
         for (long ic = 0; ic < real->image_width; ic++) {
             float r = (float)ir;
             float c = (float)ic;
@@ -586,11 +646,11 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
+            // Calculate radiance and gradients for a single pixel
             vec3 out_real;
             vec3 out_gradient;
-            SceneParams params;
-            params.offset = 0.0f;
-            render_get_gradient_helper(out_real, out_gradient, rng, camera_position, direction);
+
+            render_get_gradient_helper(out_real, out_gradient, rng, camera_position, direction, params);
 
             image_set(real, ir, ic, out_real);
             vec3_scale(out_gradient, out_gradient, 0.5);
@@ -599,21 +659,4 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
             image_set(gradient, ir, ic, out_gradient);
         }
     }
-}
-
-int main(int argc, char *argv[]) {
-    FILE *freal = fopen("real.bpm", "w");
-    FILE *fgradient = fopen("gradient.bpm", "w");
-
-    long image_width = 500;
-    long image_height = 500;
-    Image real = make_image(image_width, image_height);
-    Image gradient = make_image(image_width, image_height);
-
-    RandomState rng = make_random();
-    render_image(&real, &gradient, &rng);
-    image_write_bpm(&real, freal);
-    image_write_bpm(&gradient, fgradient);
-    free_image(&real);
-    free_image(&gradient);
 }
