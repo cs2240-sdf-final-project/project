@@ -247,7 +247,7 @@ static inline float critical_point_bisect_midpoint(float a, float b, void *conte
     float dir_b = directional_derivative(ctx->origin, ctx->direction, b, ctx->params);
     // have points (a, dir_a) and (b, dir_b). want to find the zero crossing.
     float denom = dir_a - dir_b;
-    if (denom < 1e-5) {
+    if (fabsf(denom) < 1e-5) {
         return a; // arbitrarily choose one of the endpoints
     }
     float numer = dir_a * b - a * dir_b;
@@ -261,7 +261,7 @@ static inline BisectAffinity critical_point_bisect_affinity(float t, int iter_co
     }
     // do a distance check on a fixed small iteration number to stop early
     const int early_stop_check_iter = 2;
-    const float preliminary_distance_threshold = 5e-1;
+    const float preliminary_distance_threshold = 1.0f;
     if (iter_count == early_stop_check_iter) {
         vec3 pos;
         ray_step(pos, ctx->origin, ctx->direction, t);
@@ -279,37 +279,32 @@ typedef struct {
     float t_if_found_critical_point;
 } SearchResult;
 
-inline SearchResult search_for_critical_point(const vec3 origin, const vec3 direction, const SceneParams *params, float t_min, float t_max) {
+void search_for_critical_point(const vec3 origin, const vec3 direction, const SceneParams *params, float t_min, float t_max, SearchResult *ret) {
+    ret->found_critical_point = false;
+    ret->t_if_found_critical_point = 0.0;
     // width of the scene band
-    const float distance_threshold = 1e-1f;
-
+    const float distance_threshold = 2e-1f;
     // we consider directional derivatives this large to be zero
-    const float directional_derivative_threshold = 1e-4f;
-
+    const float directional_derivative_threshold = 1e-1f;
     // we will bisect this many iterations in order to find the true location of the minimum directional derivative
     const int extensive_depth = 12;
-
     CriticalPointContext context;
     vec3_dup(context.origin, origin);
     vec3_dup(context.direction, direction);
     context.params = params;
     context.iter_cap = extensive_depth;
-
     float best_t = bisect(t_min, t_max, critical_point_bisect_affinity, critical_point_bisect_midpoint, &context);
     vec3 best_pos;
     ray_step(best_pos, origin, direction, best_t);
     if (scene_sample_sdf(best_pos, params) > distance_threshold) {
-        SearchResult ret = { false, 0.0 };
-        return ret;
+        return;
     }
-
     float best_dir_t = directional_derivative(origin, direction, best_t, params);
     if (fabsf(best_dir_t) > directional_derivative_threshold) {
-        SearchResult ret = { false, 0.0 };
-        return ret;
+        return;
     }
-    SearchResult ret = { true, best_t };
-    return ret;
+    ret->found_critical_point = true;
+    ret->t_if_found_critical_point = best_t;
 }
 
 float sdf_normal_wrapper(const vec3 pos, const float *params) {
@@ -338,30 +333,25 @@ void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfR
         {0.0f, 1.0f, 0.0f},
         {0.0f, 0.0f, 1.0f},
     };
-
     float lightDirections[3][3] = {
         {-3.f, 0.f, -2.f},
         {-3.f, 2.f, 0.f},
         {0.f, 2.f, 3.f},
     };
-
     float kd = 0.5;
     float ks = 1.0;
-
     vec3_dup(radiance, sample->ambient);
     for (int l = 0; l < 3; l++) {
         vec3 lightColor;
         vec3_dup(lightColor, lightColors[l]);
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
-
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
         vec3 bounce;
         for (int i = 0; i < 3; i++) {
             bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
         }
         float specular = powf(vec3_mul_inner(bounce, looking), sample->shininess);
-
         for (int i = 0; i < 3; i++) {
             radiance[i] += kd * facing * sample->diffuse[i] * lightColor[i];
             radiance[i] += ks * specular * sample->specular[i] * lightColor[i];
@@ -374,7 +364,7 @@ typedef struct {
     float intersection_t;
 } IntersectionResult;
 
-void get_critial_point_along(
+void get_critical_point_along(
     vec3 radiance,
     const vec3 origin,
     const vec3 direction,
@@ -386,54 +376,43 @@ void get_critial_point_along(
     const float max_step_size = 1.0f;
     // take this many steps to balance performance with exploring the entire scene
     const int number_of_steps = 1'000;
-
     // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
     const float contact_threshold = 1e-4f;
-
     float t = 0.0;
     float previous_t = 0.0;
-
     SearchResult critical_point = { false, 0.0 };
     IntersectionResult intersection = { false, 0.0 };
-
     for (int i = 0; i < number_of_steps; i++) {
         float dir_previous_t = directional_derivative(origin, direction, previous_t, params);
         float dir_t = directional_derivative(origin, direction, t, params);
-
         // look for a sign change in the directional derivative
         if (!critical_point.found_critical_point && ((dir_previous_t < 0) && (dir_t > 0))) {
             // let's try to find critical_point between t and previous_t
-            SearchResult local_res = search_for_critical_point(origin, direction, params, previous_t, t);
+            SearchResult local_res;
+            search_for_critical_point(origin, direction, params, previous_t, t, &local_res);
             if (local_res.found_critical_point) {
                 critical_point = local_res;
             }
         }
-
         vec3 pos;
         ray_step(pos, origin, direction, t);
         float distance = scene_sample_sdf(pos, params);
-
         if (distance < contact_threshold) {
             intersection.found_intersection = true;
             intersection.intersection_t = t;
             break;
         }
-
         float step_size = fminf(max_step_size, distance);
         previous_t = t;
         t += step_size;
     }
-
     if (intersection.found_intersection) {
         vec3 current_position;
         ray_step(current_position, origin, direction, intersection.intersection_t);
-
         SdfResult sample;
         scene_sample(current_position, params, &sample);
-
         vec3 normal;
         get_normal_from(normal, current_position, params);
-
         phongLight(radiance, direction, normal, &sample);
     } else {
         vec3 red = {1.0f, 0.0f, 0.0f};
@@ -448,24 +427,7 @@ void get_critial_point_along(
     }
 }
 
-// void color_normal(vec3 radiance, const vec3 normal) {
-//     vec3_dup(radiance, normal);
-//     vec3_scale(radiance, radiance, 0.5);
-//     vec3 to_add;
-//     vec3_set(to_add, 0.5);
-//     vec3_add(radiance, radiance, to_add);
-// }
-
-            // lightDir = -normalize(lightDirections[i].xyz);
-            // vec4 lightColor = lightColors[i];
-
-            // // Diffuse term
-            // fragColor += k_d * clamp(max(dot(lightDir, normal), 0.0),0.0,1.0) * cDiffuse * lightColor;
-
 void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const SceneParams *params) {
-    get_critial_point_along(radiance, origin, direction, params, rng);
-    return;
-    
     vec3_set(radiance, 0.0);
     vec3 current_position;
     vec3_dup(current_position, origin);
@@ -474,10 +436,8 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
         if (distance < 1e-4f) {
             SdfResult sample;
             scene_sample(current_position, params, &sample);
-            
             vec3 normal;
             get_normal_from(normal, current_position, params);
-    
             phongLight(radiance, direction, normal, &sample);
             break;
         } else {
@@ -636,9 +596,17 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
+            // render_get_gradient_wrapper(out_real, out_gradient, rng, camera_position, direction);
+            // vec3_set(out_gradient, 0.0);
+            // SceneParams params;
+            // params.offset = 0.1f;
+            // get_critical_point_along(out_real, camera_position, direction, &params, rng);
             vec3 out_real;
             vec3 out_gradient;
-            render_get_gradient_wrapper(out_real, out_gradient, rng, camera_position, direction);
+            vec3_set(out_gradient, 0.0);
+            SceneParams params;
+            params.offset = 0.1f;
+            get_critical_point_along(out_real, camera_position, direction, &params, rng);
 
             image_set(real, ir, ic, out_real);
             vec3_scale(out_gradient, out_gradient, 0.5);
@@ -665,4 +633,3 @@ int main(int argc, char *argv[]) {
     free_image(&real);
     free_image(&gradient);
 }
-
