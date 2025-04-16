@@ -5,8 +5,11 @@ build: build/a.exe
 
 run: build/a.exe
 	build/a.exe
-	convert real.bpm real.png
-	convert gradient.bpm gradient.png
+	# convert real.ppm real.png
+	# convert gradient.ppm gradient.png
+	convert -delay 10 -loop 1 $(shell echo temp/real_*.ppm) real.gif
+	convert -delay 10 -loop 1 $(shell echo temp/gradient_*.ppm) gradient.gif
+
 
 build/a.exe: build/output.ll
 	clang-16 $< $(FLAGS) -lm -o $@

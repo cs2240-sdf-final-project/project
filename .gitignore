@@ -1,3 +1,9 @@
 build/*.ll
 build/*.exe
+
 .vscode
+
+.DS_Store
+**/.DS_Store
+
+temp/*

@@ -2,9 +2,11 @@
 #include <stdio.h>
 #include <stdio.h>
 #include <assert.h>
+#include <cctype>
 #include "linmath.h"
 #include "sim_random.h"
-
+#include <sys/stat.h>
+#include <sys/types.h>
 
 int enzyme_dup;
 int enzyme_dupnoneed;
@@ -160,35 +162,42 @@ void sdf_compose(SdfResult *r, SdfResult *a, SdfResult *b) {
     r->shininess = closest->shininess;
 }
 
+// void sdf(const vec3 pos, float param, SdfResult *result) {
+//     // sdfCylinder(pos, 0.5, 1.0, param, result);
+//     // vec3 diffuse = {1.0f, 0.0f, 0.0f};
+//     // vec3_dup(result->cDiffuse, diffuse);
+
+//     // return;
+
+//     SdfResult a;
+//     sdf_default(&a);
+
+
+//     sdfCylinder(pos, 0.5, 1.0, param, &a);
+//     vec3 diffuse = {1.0f, 0.0f, 0.0f};
+//     vec3_dup(a.cDiffuse, diffuse);
+//     vec3 offset = {3.f,3.f,3.f};
+//     //vec3 normal = {1.0, 0.0, 0.0};
+//     //sdfPlane(pos, normal, 0.3, 0.5, result);
+//     vec3 pos1;
+//     vec3_add(pos1, offset, pos);
+//     SdfResult b;
+//     sdf_default(&b);
+
+//     sdfVerticalCapsule(pos1, 2.0, 1.0, param, &b);
+
+//     vec3 diffuse2 = {0.0f, 0.0f, 1.0f};
+//     vec3_dup(b.cDiffuse, diffuse2);
+
+//     //sdfTriPrism(pos, 1.0, 5.0, param, result)
+//     sdf_compose(result, &a, &b);
+// }
+
 void sdf(const vec3 pos, float param, SdfResult *result) {
-    // sdfCylinder(pos, 0.5, 1.0, param, result);
-    // vec3 diffuse = {1.0f, 0.0f, 0.0f};
-    // vec3_dup(result->cDiffuse, diffuse);
-
-    // return;
-
-    SdfResult a;
-    sdf_default(&a);
-
-
-    sdfCylinder(pos, 0.5, 1.0, param, &a);
+    sdf_default(result);
+    sdfCylinder(pos, 0.5, 1.0, param, result);
     vec3 diffuse = {1.0f, 0.0f, 0.0f};
-    vec3_dup(a.cDiffuse, diffuse);
-    vec3 offset = {3.f,3.f,3.f};
-    //vec3 normal = {1.0, 0.0, 0.0};
-    //sdfPlane(pos, normal, 0.3, 0.5, result);
-    vec3 pos1;
-    vec3_add(pos1, offset, pos);
-    SdfResult b;
-    sdf_default(&b);
-
-    sdfVerticalCapsule(pos1, 2.0, 1.0, param, &b);
-
-    vec3 diffuse2 = {0.0f, 0.0f, 1.0f};
-    vec3_dup(b.cDiffuse, diffuse2);
-
-    //sdfTriPrism(pos, 1.0, 5.0, param, result)
-    sdf_compose(result, &a, &b);
+    vec3_dup(result->cDiffuse, diffuse);
 }
 
 float sdf_normal_wrapper(const vec3 pos, float param) {
@@ -275,6 +284,7 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
     vec3_set(radiance, 0.0);
     vec3 current_position;
     vec3_dup(current_position, origin);
+    // Ray marching:
     for (int i = 0; i < 100; i++) {
         SdfResult res;
         sdf2(current_position, param, &res);
@@ -293,8 +303,9 @@ void render_get_radiance(vec3 radiance, RandomState *rng, const vec3 origin, con
 
 extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, float, float);
 
-void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    float param = 0.1f;
+void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction, float param) {
+    // param is defined here:
+    // float param = 0.1f;
     float d_param = 1.0f;
 
     vec3 radiance;
@@ -302,6 +313,7 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
     vec3 d_radiance;
     vec3_set(d_radiance, 1.f);
 
+    // Calculate radiance with autodiff
     __enzyme_fwddiff_radiance(
         (void*)render_get_radiance,
         enzyme_dup, radiance, d_radiance,
@@ -314,17 +326,18 @@ void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, cons
     vec3_dup(gradient, d_radiance);
 }
 
-void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
+void render_get_gradient_wrapper(vec3 out_real, vec3 out_gradient, RandomState *rng, const vec3 origin, const vec3 direction, float param) {
     vec3_set(out_real, 0.f);
     vec3_set(out_gradient, 0.f);
     int count = 1;
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++) { // multiple samples for path tracing
         vec3 real;
         vec3 gradient;
-        render_get_gradient_helper(real, gradient, rng, origin, direction);
+        render_get_gradient_helper(real, gradient, rng, origin, direction, param);
         vec3_add(out_real, out_real, real);
         vec3_add(out_gradient, out_gradient, gradient);
     }
+    // divide by pdfs
     vec3_scale(out_real, out_real, 1.f / (float)count);
     vec3_scale(out_gradient, out_gradient, 1.f / (float)count);
 }
@@ -346,6 +359,58 @@ typedef struct {
     long num_bytes;
     char *buf;
 } Image;
+
+//////////////////////////////////////
+// Begin PPM Parser from ChatGPT /////
+void skip_whitespace_and_comments(FILE *f) {
+    int c;
+    while ((c = fgetc(f)) != EOF) {
+        if (c == '#') {
+            // Skip the comment line
+            while ((c = fgetc(f)) != '\n' && c != EOF);
+        } else if (!isspace(c)) {
+            ungetc(c, f);
+            break;
+        }
+    }
+}
+int image_read_bpm(Image *image, FILE *f) {
+    char header[3];
+    if (fscanf(f, "%2s", header) != 1 || strcmp(header, "P6") != 0) {
+        fprintf(stderr, "Unsupported or invalid PPM format\n");
+        return 0;
+    }
+    skip_whitespace_and_comments(f);
+    if (fscanf(f, "%ld", &image->image_width) != 1) return 0;
+
+    skip_whitespace_and_comments(f);
+    if (fscanf(f, "%ld", &image->image_height) != 1) return 0;
+
+    skip_whitespace_and_comments(f);
+    int maxval;
+    if (fscanf(f, "%d", &maxval) != 1 || maxval != 255) {
+        fprintf(stderr, "Unsupported max color value (only 255 supported)\n");
+        return 0;
+    }
+    // Skip the single whitespace character after maxval
+    fgetc(f);
+    image->num_bytes = image->image_width * image->image_height * 3;
+    image->buf = (char *)malloc((size_t)image->num_bytes);
+    if (!image->buf) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return 0;
+    }
+    size_t bytes_read = fread(image->buf, 1, (size_t)image->num_bytes, f);
+    if (bytes_read != (size_t)image->num_bytes) {
+        fprintf(stderr, "Failed to read image data\n");
+        free(image->buf);
+        image->buf = NULL;
+        return 0;
+    }
+    return 1; // success
+}
+// End PPM Parser from ChatGPT ///////
+//////////////////////////////////////
 
 Image make_image(long image_width, long image_height) {
     Image image;
@@ -389,7 +454,19 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     }
 }
 
-void render_image(Image *real, Image *gradient, RandomState *rng) {
+void image_get(vec3 radiance, Image *image, long ir, long ic) {
+    assert(ir >= 0);
+    assert(ir < image->image_height);
+    assert(ic >= 0);
+    assert(ic < image->image_width);
+    for (long p = 0; p < 3; p++) {
+        long index = get_index(&image->strides, ir, ic, p);
+        char value = image->buf[index];
+        radiance[p] = (float)value / 255.f;
+    }
+}
+
+void render_image(Image *real, Image *gradient, RandomState *rng, float param) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
@@ -411,9 +488,9 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
     mat4x4_invert(world_from_camera, projection_view);
 
     for (long ir = 0; ir < real->image_height; ir++) {
-        if (ir % 50 == 0) {
-            printf("on row %ld\n", ir);
-        }
+        // if (ir % 50 == 0) {
+        //     printf("on row %ld\n", ir);
+        // }
         for (long ic = 0; ic < real->image_width; ic++) {
             float r = (float)ir;
             float c = (float)ic;
@@ -431,9 +508,10 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
+            // Calculate radiance and gradients for a single pixel
             vec3 out_real;
             vec3 out_gradient;
-            render_get_gradient_wrapper(out_real, out_gradient, rng, camera_position, direction);
+            render_get_gradient_wrapper(out_real, out_gradient, rng, camera_position, direction, param);
 
             image_set(real, ir, ic, out_real);
             vec3_scale(out_gradient, out_gradient, 0.5);
@@ -444,20 +522,104 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
     }
 }
 
+float mse_loss(Image *real, Image *groundtruth) {
+    float loss = 0.f;
+    float count = 0.f;
+    for (long ir = 0; ir < real->image_height; ir++) {
+        for (long ic = 0; ic < real->image_width; ic++) {
+            vec3 radiance_groundtruth;
+            vec3 radiance_real;
+            image_get(radiance_groundtruth, groundtruth, ir, ic);
+            image_get(radiance_real, real, ir, ic);
+            vec3 error;
+            vec3_sub(error, radiance_real, radiance_groundtruth);
+            vec3 squared_error = {powf(error[0], 2), powf(error[1], 2), powf(error[2], 2)};
+            float squared_error_avg = (1.f / 3.f) * (squared_error[0] + squared_error[1] + squared_error[2]);
+            loss += squared_error_avg;
+            count += 1.f;
+        }
+    }
+    loss /= count;
+    return loss;
+}
+
+float mse_loss_deriv(Image *real, Image *groundtruth, Image *gradient) {
+    float deriv = 0.f;
+    float count = 0.f;
+    for (long ir = 0; ir < real->image_height; ir++) {
+        for (long ic = 0; ic < real->image_width; ic++) {
+            vec3 pixel_groundtruth;
+            vec3 pixel_real;
+            vec3 pixel_gradient;
+
+            image_get(pixel_groundtruth, groundtruth, ir, ic);
+            image_get(pixel_real, real, ir, ic);
+            image_get(pixel_gradient, gradient, ir, ic);
+
+            vec3 error;
+            vec3_sub(error, pixel_real, pixel_groundtruth);
+            vec3 twice_error;
+            vec3_scale(twice_error, error, 2.f);
+            vec3 pixel_deriv = {twice_error[0] * pixel_gradient[0],
+                twice_error[1] * pixel_gradient[1],
+                twice_error[2] * pixel_gradient[2]};
+
+            float pixel_deriv_avg = (1.f / 3.f) * (pixel_deriv[0] + pixel_deriv[1] + pixel_deriv[2]);
+            deriv += pixel_deriv_avg;
+            count += 1.f;
+        }
+    }
+    deriv /= count;
+    return deriv;
+}
+
+void gradient_step(float *param, float deriv, float learning_rate = 500.f) {
+    // TODO: implement a better optimizer like Adam or something
+    *param = *param - learning_rate * deriv;
+}
+
 int main(int argc, char *argv[]) {
-    FILE *freal = fopen("real.bpm", "w");
-    FILE *fgradient = fopen("gradient.bpm", "w");
+    mkdir("temp", 0777); // do nothing if temp already exists
+
+    // FILE *freal = fopen("real.bpm", "w");
+    // FILE *fgradient = fopen("gradient.bpm", "w");
+    FILE *fgroundtruth = fopen("groundtruth.ppm", "r");
 
     long image_width = 500;
     long image_height = 500;
     Image real = make_image(image_width, image_height);
     Image gradient = make_image(image_width, image_height);
+    Image groundtruth = make_image(image_width, image_height);
+    image_read_bpm(&groundtruth, fgroundtruth);
 
-    RandomState rng = make_random();
-    render_image(&real, &gradient, &rng);
-    image_write_bpm(&real, freal);
-    image_write_bpm(&gradient, fgradient);
+    float param = 0.1f;
+    const int num_epochs = 20;
+    for (int epoch = 0; epoch < num_epochs; epoch++) {
+        RandomState rng = make_random();
+        render_image(&real, &gradient, &rng, param); // calculate radiance and gradients
+    
+        // Compute loss and derivative of loss
+        float loss = mse_loss(&real, &groundtruth);
+        float loss_deriv = mse_loss_deriv(&real, &groundtruth, &gradient);
+        printf("loss: %f\n", loss);
+        printf("deriv: %f\n", loss_deriv);
+        
+        // Gradient step
+        gradient_step(&param, loss_deriv);
+        printf("param: %f\n", param);
+
+        // Write each frame to a file
+        char fn_real[256];
+        snprintf(fn_real, sizeof(fn_real), "temp/real_%04d.ppm", epoch);
+        FILE *freal = fopen(fn_real, "w");
+        char fn_gradient[256];
+        snprintf(fn_gradient, sizeof(fn_gradient), "temp/gradient_%04d.ppm", epoch);
+        FILE *fgradient = fopen(fn_gradient, "w");
+        image_write_bpm(&real, freal);
+        image_write_bpm(&gradient, fgradient);
+    }
     free_image(&real);
     free_image(&gradient);
+    free_image(&groundtruth);
 }
 
