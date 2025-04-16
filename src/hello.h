@@ -38,8 +38,12 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance);
 void image_get(vec3 radiance, Image *image, long ir, long ic);
 void render_image(Image *real, Image *gradient, RandomState *rng, const SceneParams *params);
 
+const int RED = 0;
+const int GREEN = 1;
+const int BLUE = 2;
+
 typedef struct {
-    SceneParams *r, *g, *b;
+    SceneParams *rgb[3];
 } SceneParamsPerChannel;
 
 typedef struct {

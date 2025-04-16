@@ -166,16 +166,16 @@ static float *float_pointer_from_params(SceneParams *out) {
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
     float *raw_out_params = float_pointer_from_params(out_params);
     const float *raw_a = float_pointer_from_params(a);
-    const float *raw_b = float_pointer_from_params(a);
+    const float *raw_b = float_pointer_from_params(b);
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_out_params[i] = raw_a[i] + raw_b[i];
     }
 }
 
-void scene_params_elementwise_mul(SceneParams *out_params, SceneParams *a, SceneParams *b) {
+void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
     float *raw_out_params = float_pointer_from_params(out_params);
     const float *raw_a = float_pointer_from_params(a);
-    const float *raw_b = float_pointer_from_params(a);
+    const float *raw_b = float_pointer_from_params(b);
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_out_params[i] = raw_a[i] * raw_b[i];
     }
@@ -253,7 +253,6 @@ float scene_sample_sdf(const vec3 pos, const SceneParams *params) {
     scene_sample(pos, params, &sample);
     return sample.distance;
 }
-
 
 float directional_derivative_inner(const vec3 origin, const vec3 direction, float t, const SceneParams *params) {
     vec3 scaled;
@@ -386,7 +385,6 @@ void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsI
     );
 }
 
-
 void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
     float lightColors[3][3] = {
         {1.0f, 0.0f, 0.0f},
@@ -472,53 +470,14 @@ void get_critical_point_along(
         vec3 normal;
         get_normal_from(normal, current_position, params);
         phongLight(radiance, direction, normal, &sample);
-    } else {
-        // uncomment for debug colors
-        // vec3 red = {1.0f, 0.0f, 0.0f};
-        // vec3 black = {0.0f, 0.0f, 0.0f};
-        // float *which;
-        // if (critical_point.found_critical_point) {
-        //     which = black; // make this red for debug colors
-        // } else {
-        //     which = black;
-        // }
-        //vec3_dup(radiance, which);
     }
 }
-
-void render_get_radiance(
-    vec3 radiance,
-    const vec3 origin,
-    const vec3 direction,
-    const SceneParams *params,
-    RandomState *rng
-) {
-    vec3_set(radiance, 0.0);
-    vec3 current_position;
-    vec3_dup(current_position, origin);
-    for (int i = 0; i < 100; i++) {
-        float distance = scene_sample_sdf(current_position, params);
-        if (distance < 1e-4f) {
-            SdfResult sample;
-            scene_sample(current_position, params, &sample);
-            vec3 normal;
-            get_normal_from(normal, current_position, params);
-            phongLight(radiance, direction, normal, &sample);
-            break;
-        } else {
-            ray_step(current_position, current_position, direction, distance);
-        }
-    }
-}
-
 
 GradientImage make_gradient_image(long image_width, long image_height) {
     const long num_subpixels = 3;
-
     long num_floats = number_of_scene_params * image_width * image_height * num_subpixels;
-    float *buf = (float *)calloc(sizeof(float), num_floats);
+    float *buf = (float *)calloc(sizeof(float), (size_t)num_floats);
     assert(buf);
-
     GradientStrides strides;
     strides.parameter_stride = 1;
     strides.subpixel_stride = number_of_scene_params;
@@ -530,22 +489,26 @@ GradientImage make_gradient_image(long image_width, long image_height) {
     ret.image_width = image_width;
     ret.num_subpixels = 3;
     ret.buf = buf;
-
     return ret;
 }
 
 void free_gradient_image(GradientImage *image) {
-    free(image);
+    free(image->buf);
 }
 
 static inline long gradient_image_get_index(const GradientStrides *s, long r, long c, long subpixel, long param) {
     return r * s->row_stride + c * s->col_stride + subpixel * s->subpixel_stride + param * s->parameter_stride;
 }
 
+static inline void params_per_channel_fill(SceneParamsPerChannel *ppc, float fill_with) {
+    for (int i = 0; i < 3; i++) {
+        scene_params_fill(ppc->rgb[i], fill_with);
+    }
+}
+
 inline void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic) {
-    const SceneParams *ppcs[] = {ppc->r, ppc->g, ppc->b};
     for (long subpixel = 0; subpixel < 3; subpixel++) {
-        const SceneParams *params = ppcs[subpixel];
+        const SceneParams *params = ppc->rgb[subpixel];
         const float *raw_params = float_pointer_from_params(params);
         for (long p = 0; p < number_of_scene_params; p++) {
             long index = gradient_image_get_index(&image->strides, ir, ic, subpixel, p);
@@ -555,9 +518,8 @@ inline void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *
 }
 
 inline void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic) {
-    SceneParams *ppcs[] = {ppc->r, ppc->g, ppc->b};
     for (long subpixel = 0; subpixel < 3; subpixel++) {
-        SceneParams *params = ppcs[subpixel];
+        SceneParams *params = ppc->rgb[subpixel];
         float *raw_params = float_pointer_from_params(params);
         for (long p = 0; p < number_of_scene_params; p++) {
             long index = gradient_image_get_index(&image->strides, ir, ic, subpixel, p);
@@ -568,19 +530,37 @@ inline void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *
 
 // TODO: figure this shit out
 void render_get_radiance_wrapper(
-    vec3 radiance,
     RandomState *rng,
     const vec3 origin,
     const vec3 direction,
-    const float *raw_params
+    const float *raw_params,
+    SearchResult *critical_point,
+    float *red,
+    float *green,
+    float *blue
 ) {
     const SceneParams *params = params_from_float_pointer(raw_params);
-    get_critical_point_along(radiance, origin, direction, params, rng);
+    vec3 radiance;
+    get_critical_point_along(radiance, origin, direction, params, rng, critical_point);
+    float *rgb[3] = {red, green, blue};
+    for (int i = 0; i < 3; i++) {
+        *rgb[i] = radiance[i];
+    }
 }
 
-extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *, int , SearchResult *);
+extern void __enzyme_autodiff_radiance(
+    void *,
+    int, RandomState *,
+    int, const float *,
+    int, const float *,
+    int, const float *,
+    int, SearchResult *,
+    int, float *, float *,
+    int, float *, float *,
+    int, float *, float *
+);
 
-void render_get_gradient_helper(
+void render_pixel(
     vec3 real,
     RandomState *rng,
     const vec3 origin,
@@ -588,45 +568,55 @@ void render_get_gradient_helper(
     SceneParamsPerChannel *params_per_channel,
     const SceneParams *params
 ) {
-    scene_params_fill(params_per_channel->r, 1.f);
-    scene_params_fill(params_per_channel->b, 1.f);
-    scene_params_fill(params_per_channel->g, 1.f);
+    params_per_channel_fill(params_per_channel, 1.f);
 
     SearchResult critical_point;
 
+    const float *raw_params = float_pointer_from_params(params);
+
+    float *raw_out_params[3];
+    for (int c =0; c < 3; c++) {
+        raw_out_params[c] = float_pointer_from_params(params_per_channel->rgb[c]);
+    }
+
+    vec3 radiance;
     // Calculate radiance with autodiff
-    __enzyme_fwddiff_radiance(
+    __enzyme_autodiff_radiance(
         (void*)render_get_radiance_wrapper,
-        enzyme_dup, real_rgb, d_radiance,
         enzyme_const, rng,
         enzyme_const, origin,
         enzyme_const, direction,
-        enzyme_dupnoneed, raw_params, d_raw_params,
-        enzyme_const, &critical_point);
+        enzyme_out, raw_params,
+        enzyme_const, &critical_point,
+        enzyme_dup, &radiance[RED], raw_out_params[RED],
+        enzyme_dup, &radiance[GREEN], raw_out_params[GREEN],
+        enzyme_dup, &radiance[BLUE], raw_out_params[BLUE]
+    );
 
-    if(critical_point->found_critical_point) {
-        vec3 y_star_radiance;
+    if(critical_point.found_critical_point) {
         vec3 y_star;
-        vec3_set(y_star_radiance, 1.0f);
-        ray_step(y_star, origin, direction, critical_point->t_if_found_critical_point);
+        ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
         SdfResult sample;
-        scene_sample(y_star, &params, &sample);
+        scene_sample(y_star, params, &sample);
         vec3 normal;
-        get_normal_from(normal, y_star, &params);
+        get_normal_from(normal, y_star, params);
+
+        vec3 y_star_radiance;
         phongLight(y_star_radiance, direction, normal, &sample);
 
         SceneParams* paramOut;
 
-        diff_sdf(y_star, paramOut, &params);
+        diff_sdf(y_star, paramOut, params);
 
         vec3 deltaL;
         vec3_sub(deltaL, y_star_radiance, radiance);
 
         vec3 boundary_integral;
         vec3_set(boundary_integral, 0.0f);
-        vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
+        // TODO: figure this out with the matrix multiply
+        // vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
 
-        vec3_add(d_radiance, d_radiance, boundary_integral);
+        // vec3_add(d_radiance, d_radiance, boundary_integral);
     }
 }
 
@@ -741,7 +731,7 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
 }
 
 /** TODO: this output shape should be correct */
-void render_image(Image *real, Image *gradient, RandomState *rng, const SceneParams *params) {
+void render_image(Image *real, GradientImage *gradient, RandomState *rng, const SceneParams *params) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
@@ -761,6 +751,11 @@ void render_image(Image *real, Image *gradient, RandomState *rng, const ScenePar
 
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
+
+    SceneParamsPerChannel ppc;
+    for (int c = 0; c < 3; c++) {
+        ppc.rgb[c] = make_scene_params();
+    }
 
     for (long ir = 0; ir < real->image_height; ir++) {
         // if (ir % 50 == 0) {
@@ -785,15 +780,14 @@ void render_image(Image *real, Image *gradient, RandomState *rng, const ScenePar
 
             // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            vec3 out_gradient;
-
-            render_get_gradient_helper(out_real, out_gradient, rng, camera_position, direction, params);
+            render_pixel(out_real, rng, camera_position, direction, &ppc, params);
 
             image_set(real, ir, ic, out_real);
-            vec3_scale(out_gradient, out_gradient, 0.5);
-            vec3 half = {0.5, 0.5, 0.5};
-            vec3_add(out_gradient, out_gradient, half);
-            image_set(gradient, ir, ic, out_gradient);
+            gradient_image_set(&ppc, gradient, ir, ic);
         }
+    }
+
+    for (int c = 0; c < 3; c++) {
+        free_scene_params(ppc.rgb[c]);
     }
 }
