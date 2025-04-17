@@ -2,16 +2,13 @@ build/*.ll
 build/*.exe
 build/*.o
 
+debug-gradient/*.ppm
+descent-sequence/*.ppm
 
 .vscode
 *.bpm
-<<<<<<< HEAD
 
 .DS_Store
 **/.DS_Store
 
 temp/*
-=======
-**/.DS_Store
-temp/*
->>>>>>> 5fc2c59 (made an sdf scene for the cornell box)

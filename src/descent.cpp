@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -76,11 +77,10 @@ void gradient_step(SceneParams *params, const SceneParams *deriv, float learning
 }
 
 int main(void) {
-    mkdir("temp", 0777); // do nothing if temp already exists
+    mkdir("descent-sequence", 0777); // do nothing if temp already exists
 
-    // FILE *freal = fopen("real.bpm", "w");
-    // FILE *fgradient = fopen("gradient.bpm", "w");
     FILE *fgroundtruth = fopen("groundtruth.ppm", "r");
+    assert(fgroundtruth);
 
     long image_width = 500;
     long image_height = 500;
@@ -90,7 +90,6 @@ int main(void) {
     image_read_bpm(&groundtruth, fgroundtruth);
 
     SceneParams *params = make_scene_params();
-    params->offset = 0.1f;
     SceneParams *loss_deriv = make_scene_params();
 
     const int num_epochs = 20;
@@ -111,11 +110,11 @@ int main(void) {
 
         // Write each frame to a file
         char fn_real[256];
-        snprintf(fn_real, sizeof(fn_real), "temp/real_%04d.ppm", epoch);
+        snprintf(fn_real, sizeof(fn_real), "descent-sequence/real_%04d.ppm", epoch);
         FILE *freal = fopen(fn_real, "w");
         char fn_gradient[256];
-        snprintf(fn_gradient, sizeof(fn_gradient), "temp/gradient_%04d.ppm", epoch);
-        image_write_bpm(&real, freal);
+        snprintf(fn_gradient, sizeof(fn_gradient), "descent-sequence/gradient_%04d.ppm", epoch);
+        image_write_ppm(&real, freal);
     }
 
     free_scene_params(loss_deriv);

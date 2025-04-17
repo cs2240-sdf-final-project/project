@@ -16,7 +16,7 @@ int enzyme_out;
 int enzyme_const;
 
 // width of the scene band
-const float distance_threshold = 2e-1f;
+const float distance_threshold = 5e-2f;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -54,11 +54,6 @@ float clamp(float x, float min, float max) {
     return fmaxf(fminf(x, max), min);
 }
 
-void vec3_clamp(vec3 out, const vec3 x, const vec3 min, const vec3 max) {
-    vec3_min(out, x, max);
-    vec3_max(out, out, min);
-}
-
 void dehomogenize(vec3 out, const vec4 in) {
     for (int i = 0; i < 3; i++) {
         out[i] = in[i] / in[3];
@@ -84,7 +79,6 @@ void vec2_abs(vec2 out, const vec2 in) {
         out[i] = fabsf(in[i]);
     }
 }
-
 
 float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
@@ -115,11 +109,11 @@ float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     return dist;
 }
 
-float sdfTriPrism(const vec3 orgin, float h0, float h1) {
+float sdfTriPrism(const vec3 origin, float h0, float h1) {
     //h[0] represents half the length of the base of the triangular prism
     //h[1] represents half the height of the prism along the z-axis
     vec3 pos;
-    vec3_dup(pos, orgin);
+    vec3_dup(pos, origin);
 
     vec3 q = {fabsf(pos[0]), fabsf(pos[1]), fabsf(pos[2])};
     float dist = fmaxf(q[2] - h1, fmaxf(q[0] * 0.866025f + pos[1] * 0.5f, -pos[1]) - h0 * 0.5f);
@@ -143,6 +137,13 @@ float sdfSphere(const vec3 pos) {
     return vec3_len(displacement) - 3.5f;
 }
 
+struct SceneParams {
+    float offset;
+    float offset2;
+};
+
+int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
+
 SceneParams *make_scene_params() {
     SceneParams *out = (SceneParams *)calloc(sizeof(float), (size_t)number_of_scene_params);
     assert(out);
@@ -158,11 +159,11 @@ static inline SceneParams *params_from_float_pointer(const float *params) {
 }
 
 static const float *float_pointer_from_params(const SceneParams *out) {
-    return &out->offset;
+    return (float *)out;
 }
 
 static float *float_pointer_from_params(SceneParams *out) {
-    return &out->offset;
+    return (float *)out;
 }
 
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
@@ -245,14 +246,29 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
     destination->shininess = b->shininess;
 }
 
-static inline void object_foreground(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    sample->distance = sdfVerticalCapsule(pos, 0.7f, 0.4f);
+static inline void object_cylinder(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 offset = {-0.4f, -0.2f, 0.2f};
+    offset[0] += params->offset;
+    vec3 pos_offset;
+    vec3_add(pos_offset, pos, offset);
+    sample->distance = sdfCylinder(pos_offset, 0.3f, 0.9f);
+    vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
+}
+static inline void object_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 offset = {0.4f, -0.3f, -0.5f};
+    offset[0] += params->offset2;
+    vec3 pos_offset;
+    vec3_add(pos_offset, pos, offset);
+    sample->distance = sdfVerticalCapsule(pos_offset, 0.5f, 0.3f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 // Back:
 static inline void object_backwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {0.0, 0.0, 1.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
@@ -261,6 +277,7 @@ static inline void object_backwall(const vec3 pos, const SceneParams *params, Sd
 }
 // Ceiling:
 static inline void object_topwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {0.0, 1.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
@@ -269,6 +286,7 @@ static inline void object_topwall(const vec3 pos, const SceneParams *params, Sdf
 }
 // Left:
 static inline void object_leftwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {1.0, 0.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
@@ -277,6 +295,7 @@ static inline void object_leftwall(const vec3 pos, const SceneParams *params, Sd
 }
 // Right:
 static inline void object_rightwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {-1.0, 0.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.14f, 0.45f, 0.091f);
@@ -285,6 +304,7 @@ static inline void object_rightwall(const vec3 pos, const SceneParams *params, S
 }
 // Floor:
 static inline void object_bottomwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {0.0, -1.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
@@ -296,7 +316,10 @@ inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *s
     default_scene_sample(sample);
     SdfResult working;
     default_scene_sample(&working);
-    object_foreground(pos, params, &working);
+    object_cylinder(pos, params, &working);
+    compose_scene_sample(sample, &working);
+    default_scene_sample(&working);
+    object_capsule(pos, params, &working);
     compose_scene_sample(sample, &working);
     default_scene_sample(&working);
     object_backwall(pos, params, &working);
@@ -627,7 +650,6 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
     }
 }
 
-// TODO: figure this shit out
 void render_get_radiance_wrapper(
     vec3 radiance,
     const IntersectionResult *intersection,
@@ -684,31 +706,26 @@ void render_pixel(
         }
     }
 
-    free_scene_params(dummy_params);
-
     get_radiance_at(real, &intersection, origin, direction, params);
 
-    // if(critical_point.found_critical_point) {
-    // vec3 y_star;
-    // ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
-    // SdfResult sample;
-    // scene_sample(y_star, params, &sample);
-    // vec3 normal;
-    // get_normal_from(normal, y_star, params);
+    if(critical_point.found_critical_point) {
+        // vec3_set(real, 1.0, 0.0, 0.0);
+        vec3 y_star;
+        ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
+        SdfResult sample;
+        scene_sample(y_star, params, &sample);
+        vec3 normal;
+        get_normal_from(normal, y_star, params);
+        vec3 y_star_radiance;
+        phongLight(y_star_radiance, direction, normal, &sample);
+        diff_sdf(y_star, dummy_params, params);
 
-    // vec3 y_star_radiance;
-    // phongLight(y_star_radiance, direction, normal, &sample);
-
-    // SceneParams* paramOut;
-
-    // diff_sdf(y_star, paramOut, params);
-
-    // vec3 deltaL;
-    // vec3_sub(deltaL, y_star_radiance, radiance);
-    // vec3_scale(deltaL, deltaL, 1 / distance_threshold);
-
-    // outer_product_add_assign(params_per_channel , paramOut , deltaL);
-    // }
+        vec3 deltaL;
+        vec3_sub(deltaL, y_star_radiance, real);
+        vec3_scale(deltaL, deltaL, 1 / distance_threshold);
+        outer_product_add_assign(params_per_channel, dummy_params, deltaL);
+    }
+    free_scene_params(dummy_params);
 }
 
 
@@ -792,7 +809,7 @@ void free_image(Image *image) {
 }
 
 // https://nullprogram.com/blog/2017/11/03/
-void image_write_bpm(Image *image, FILE *f) {
+void image_write_ppm(Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
     assert(image->num_bytes > 0);
     fwrite(image->buf, 1, (size_t)image->num_bytes, f);
@@ -823,7 +840,6 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
     }
 }
 
-/** TODO: this output shape should be correct */
 void render_image(Image *real, GradientImage *gradient, const SceneParams *params) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;

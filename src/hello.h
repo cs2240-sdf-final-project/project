@@ -4,11 +4,10 @@
 #include <stdio.h>
 #include "linmath.h"
 
-static const int number_of_scene_params = 1;
+extern int number_of_scene_params;
 
-typedef struct {
-    float offset;
-} SceneParams;
+
+typedef struct SceneParams SceneParams;
 
 typedef struct {
     long row_stride;
@@ -27,6 +26,7 @@ typedef struct {
 SceneParams *make_scene_params();
 void free_scene_params(SceneParams *params);
 float scene_parameter_get(const SceneParams *params, long p);
+void scene_params_set(SceneParams *params, long p, float value);
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
 void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
 void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by);
@@ -37,7 +37,7 @@ void params_increment(SceneParams &params);
 Image make_image(long image_width, long image_height);
 void free_image(Image *image);
 int image_read_bpm(Image *image, FILE *f);
-void image_write_bpm(Image *image, FILE *f);
+void image_write_ppm(Image *image, FILE *f);
 void image_set(Image *image, long ir, long ic, const vec3 radiance);
 void image_get(vec3 radiance, Image *image, long ir, long ic);
 
