@@ -159,11 +159,6 @@ static float *float_pointer_from_params(SceneParams *out) {
     return &out->offset;
 }
 
-float scene_parameter_get(const SceneParams *params, long p) {
-    const float *raw_params = float_pointer_from_params(params);
-    return raw_params[p];
-}
-
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
     float *raw_out_params = float_pointer_from_params(out_params);
     const float *raw_a = float_pointer_from_params(a);
@@ -194,6 +189,16 @@ void scene_params_fill(SceneParams *params, float fill_with) {
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_out_params[i] = fill_with;
     }
+}
+
+float scene_parameter_get(const SceneParams *params, long p) {
+    const float *raw_params = float_pointer_from_params(params);
+    return raw_params[p];
+}
+
+void scene_params_set(SceneParams *params, long p, float value) {
+    float *raw_params = float_pointer_from_params(params);
+    raw_params[p] = value;
 }
 
 typedef struct {
@@ -431,12 +436,11 @@ typedef struct {
     float intersection_t;
 } IntersectionResult;
 
-void get_critical_point_along(
-    vec3 radiance,
+IntersectionResult trace_ray_get_critical_point(
+    SearchResult *critical_point,
     const vec3 origin,
     const vec3 direction,
-    const SceneParams *params,
-    SearchResult *critical_point
+    const SceneParams *params
 ) {
     // we take steps at most this size in order to avoid missing
     // sign changes in the directional derivatives
@@ -445,10 +449,11 @@ void get_critical_point_along(
     const int number_of_steps = 1'000;
     // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
     const float contact_threshold = 1e-4f;
+
     float t = 0.0;
     float previous_t = 0.0;
     critical_point->found_critical_point = false;
-    IntersectionResult intersection = { false, 0.0 };
+    IntersectionResult ret = { false, 0.0 };
     for (int i = 0; i < number_of_steps; i++) {
         float dir_previous_t = directional_derivative(origin, direction, previous_t, params);
         float dir_t = directional_derivative(origin, direction, t, params);
@@ -456,30 +461,42 @@ void get_critical_point_along(
         if (!critical_point->found_critical_point && ((dir_previous_t < 0) && (dir_t > 0))) {
             // let's try to find critical_point between t and previous_t;
             search_for_critical_point(origin, direction, params, previous_t, t, critical_point);
-
         }
         vec3 pos;
         ray_step(pos, origin, direction, t);
         float distance = scene_sample_sdf(pos, params);
         if (distance < contact_threshold) {
-            intersection.found_intersection = true;
-            intersection.intersection_t = t;
+            ret.found_intersection = true;
+            ret.intersection_t = t;
             break;
         }
         float step_size = fminf(max_step_size, distance);
         previous_t = t;
         t += step_size;
     }
-    if (intersection.found_intersection) {
-        vec3 current_position;
-        ray_step(current_position, origin, direction, intersection.intersection_t);
-        SdfResult sample;
-        scene_sample(current_position, params, &sample);
-        vec3 normal;
-        get_normal_from(normal, current_position, params);
-        phongLight(radiance, direction, normal, &sample);
-    }
+    return ret;
 }
+
+void get_radiance_at(
+    vec3 radiance,
+    const IntersectionResult *intersection,
+    const vec3 origin,
+    const vec3 direction,
+    const SceneParams *params
+) {
+    if (!intersection->found_intersection) {
+        vec3_set(radiance, 0.f);
+        return;
+    }
+    vec3 current_position;
+    ray_step(current_position, origin, direction, intersection->intersection_t);
+    SdfResult sample;
+    scene_sample(current_position, params, &sample);
+    vec3 normal;
+    get_normal_from(normal, current_position, params);
+    phongLight(radiance, direction, normal, &sample);
+}
+
 
 GradientImage make_gradient_image(long image_width, long image_height) {
     const long num_subpixels = 3;
@@ -564,32 +581,23 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
 
 // TODO: figure this shit out
 void render_get_radiance_wrapper(
+    vec3 radiance,
+    const IntersectionResult *intersection,
     const vec3 origin,
     const vec3 direction,
-    const float *raw_params,
-    SearchResult *critical_point,
-    float *red,
-    float *green,
-    float *blue
+    const float *raw_params
 ) {
     const SceneParams *params = params_from_float_pointer(raw_params);
-    vec3 radiance;
-    get_critical_point_along(radiance, origin, direction, params, critical_point);
-    float *rgb[3] = {red, green, blue};
-    for (int i = 0; i < 3; i++) {
-        *rgb[i] = radiance[i];
-    }
+    get_radiance_at(radiance, intersection, origin, direction, params);
 }
 
-extern void __enzyme_autodiff_radiance(
+extern void __enzyme_fwddiff_radiance(
     void *,
-    int, const float *,
-    int, const float *,
-    int, const float *,
-    int, SearchResult *,
     int, float *, float *,
-    int, float *, float *,
-    int, float *, float *
+    int, const IntersectionResult *,
+    int, const float *,
+    int, const float *,
+    int, const float *, const float *
 );
 
 void render_pixel(
@@ -599,55 +607,65 @@ void render_pixel(
     SceneParamsPerChannel *params_per_channel,
     const SceneParams *params
 ) {
-    params_per_channel_fill(params_per_channel, 1.f);
-
+    SceneParams *dummy_params = make_scene_params();
     SearchResult critical_point;
+    IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
 
-    const float *raw_params = float_pointer_from_params(params);
+    for (int p = 0; p < number_of_scene_params; p++) {
+        vec3 radiance;
+        vec3_set(radiance, 1.f);
+        vec3 d_radiance;
+        vec3_set(d_radiance, 1.f);
 
-    float *raw_out_params[3];
-    for (int c =0; c < 3; c++) {
-        raw_out_params[c] = float_pointer_from_params(params_per_channel->rgb[c]);
+        const float *raw_params = float_pointer_from_params(params);
+        scene_params_fill(dummy_params, 0.f);
+        scene_params_set(dummy_params, p, 1.f);
+        const float *raw_dummy_params = float_pointer_from_params(dummy_params);
+
+        __enzyme_fwddiff_radiance(
+            (void*)render_get_radiance_wrapper,
+            enzyme_dup, radiance, d_radiance,
+            enzyme_const, &intersection,
+            enzyme_const, origin,
+            enzyme_const, direction,
+            enzyme_dup, raw_params, raw_dummy_params
+        );
+
+        for (int ch = 0; ch < 3; ch++) {
+            scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
+        }
     }
 
-    vec3 radiance;
-    // Calculate radiance with autodiff
-    // __enzyme_autodiff_radiance(
-    //     (void*)render_get_radiance_wrapper,
-    //     enzyme_const, origin,
-    //     enzyme_const, direction,
-    //     enzyme_out, raw_params,
-    //     enzyme_const, &critical_point,
-    //     enzyme_dup, &radiance[RED], raw_out_params[RED],
-    //     enzyme_dup, &radiance[GREEN], raw_out_params[GREEN],
-    //     enzyme_dup, &radiance[BLUE], raw_out_params[BLUE]
-    // );
+    free_scene_params(dummy_params);
 
-    if(critical_point.found_critical_point) {
-        vec3 y_star;
-        ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
-        SdfResult sample;
-        scene_sample(y_star, params, &sample);
-        vec3 normal;
-        get_normal_from(normal, y_star, params);
-
-        vec3 y_star_radiance;
-        phongLight(y_star_radiance, direction, normal, &sample);
-
-        // SceneParams* paramOut;
-
-        // diff_sdf(y_star, paramOut, params);
-
-        // vec3 deltaL;
-        // vec3_sub(deltaL, y_star_radiance, radiance);
-
-        // vec3 boundary_integral;
-        // vec3_set(boundary_integral, 0.0f);
-        // TODO: figure this out with the matrix multiply
-        // vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
-
-        // vec3_add(d_radiance, d_radiance, boundary_integral);
+    vec3_set(real, 0.0f);
+    if (intersection.found_intersection) {
+        get_radiance_at(real, &intersection, origin, direction, params);
     }
+
+    // if(critical_point.found_critical_point) {
+    //     vec3 y_star;
+    //     ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
+    //     SdfResult sample;
+    //     scene_sample(y_star, params, &sample);
+    //     vec3 normal;
+    //     get_normal_from(normal, y_star, params);
+
+    //     vec3 y_star_radiance;
+    //     phongLight(y_star_radiance, direction, normal, &sample);
+
+    //     // diff_sdf(y_star, paramOut, params);
+
+    //     // vec3 deltaL;
+    //     // vec3_sub(deltaL, y_star_radiance, radiance);
+
+    //     // vec3 boundary_integral;
+    //     // vec3_set(boundary_integral, 0.0f);
+    //     // TODO: figure this out with the matrix multiply
+    //     // vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
+
+    //     // vec3_add(d_radiance, d_radiance, boundary_integral);
+    // }
 }
 
 long get_index(Strides *s, long r, long c, long p) {
