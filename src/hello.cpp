@@ -709,7 +709,6 @@ void render_pixel(
     get_radiance_at(real, &intersection, origin, direction, params);
 
     if(critical_point.found_critical_point) {
-        // vec3_set(real, 1.0, 0.0, 0.0);
         vec3 y_star;
         ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
         SdfResult sample;
@@ -719,7 +718,6 @@ void render_pixel(
         vec3 y_star_radiance;
         phongLight(y_star_radiance, direction, normal, &sample);
         diff_sdf(y_star, dummy_params, params);
-
         vec3 deltaL;
         vec3_sub(deltaL, y_star_radiance, real);
         vec3_scale(deltaL, deltaL, 1 / distance_threshold);

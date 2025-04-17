@@ -104,7 +104,7 @@ int main(void) {
         // printf("deriv: %f\n", loss_deriv); // TODO: print this struct
 
         // Gradient step
-        gradient_step(params, loss_deriv, 500.0f);
+        gradient_step(params, loss_deriv, 1.0f);
 
         // printf("param: %f\n", param);
 
