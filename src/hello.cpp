@@ -136,15 +136,33 @@ float sdfSphere(const vec3 pos) {
 
 
 typedef struct {
-    float offset;
+    float object_1_x;
+    float object_1_y;
+    float object_1_z;
+    float object_1_r;
+    float object_1_h;
+    float object_2_x;
+    float object_2_y;
+    float object_2_z;
+    float object_2_r;
+    float object_2_h;
 } SceneParams;
 
 void params_from_float_pointer(const float *params, SceneParams *out) {
-    out->offset = params[0];
+    out->object_1_x = params[0];
+    out->object_1_y = params[1];
+    out->object_1_z = params[2];
+    out->object_1_r = params[3];
+    out->object_1_h = params[4];
+    out->object_2_x = params[5];
+    out->object_2_y = params[6];
+    out->object_2_z = params[7];
+    out->object_2_r = params[8];
+    out->object_2_h = params[9];
 }
 
 const float *float_pointer_from_params(const SceneParams *out) {
-    return &out->offset;
+    return &out->object_1_x;
 }
 
 typedef struct {
@@ -207,20 +225,25 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
 //     compose_scene_sample(sample, &working);
 // }
 static inline void object_cylinder(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    vec3 offset = {-0.4f, -0.2f, 0.2f};
-    offset[0] += params->offset;
+    vec3 offset = {
+        params->object_1_x,
+        params->object_1_y,
+        params->object_1_z};
     vec3 pos_offset;
     vec3_add(pos_offset, pos, offset);
-    sample->distance = sdfCylinder(pos_offset, 0.3f, 0.9f);
+    sample->distance = sdfCylinder(pos_offset, params->object_1_r, params->object_1_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 static inline void object_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    vec3 offset = {0.4f, -0.3f, -0.5f};
+    vec3 offset = {
+        params->object_2_x,
+        params->object_2_y,
+        params->object_2_z};
     vec3 pos_offset;
     vec3_add(pos_offset, pos, offset);
-    sample->distance = sdfVerticalCapsule(pos_offset, 0.5f, 0.3f);
+    sample->distance = sdfVerticalCapsule(pos_offset, params->object_2_h, params->object_2_r);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -552,9 +575,18 @@ extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, Random
 
 void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
     SceneParams params;
-    params.offset = 0.1f;
+    params.object_1_x = -0.4f;
+    params.object_1_y = -0.2f;
+    params.object_1_z = 0.2f;
+    params.object_1_r = 0.3f;
+    params.object_1_h = 0.8f;
+    params.object_2_x = 0.4f;
+    params.object_2_y = -0.3f;
+    params.object_2_z = -0.5f;
+    params.object_2_r = 0.3f;
+    params.object_2_h = 0.5f;
     const float *raw_params = float_pointer_from_params(&params);
-    float d_param = 1.0f;
+    float d_param = 1.f;
 
     vec3 radiance;
     vec3_set(radiance, 1.f);
@@ -677,8 +709,8 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
 
             vec3 out_real;
             vec3 out_gradient;
-            SceneParams params;
-            params.offset = 0.0f;
+            // SceneParams params;
+            // params.offset = 0.0f;
             render_get_gradient_helper(out_real, out_gradient, rng, camera_position, direction);
 
             image_set(real, ir, ic, out_real);
