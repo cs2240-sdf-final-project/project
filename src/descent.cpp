@@ -101,6 +101,7 @@ int main(void) {
         mse_loss_deriv(&real, &groundtruth, &gradient, loss_deriv);
 
         printf("loss: %f\n", loss);
+        fflush(stdout);
         // printf("deriv: %f\n", loss_deriv); // TODO: print this struct
 
         // Gradient step
@@ -112,6 +113,7 @@ int main(void) {
         char fn_real[256];
         snprintf(fn_real, sizeof(fn_real), "descent-sequence/real_%04d.ppm", epoch);
         FILE *freal = fopen(fn_real, "w");
+        assert(freal);
         char fn_gradient[256];
         snprintf(fn_gradient, sizeof(fn_gradient), "descent-sequence/gradient_%04d.ppm", epoch);
         image_write_ppm(&real, freal);

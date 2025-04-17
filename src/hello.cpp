@@ -275,7 +275,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, Sdf
     vec3 offset = {0.4f, -0.3f, -0.5f};
     vec3_add(offset, offset, pos);
     vec3_add(offset, offset, dpos);
-    sample->distance = sdfVerticalCapsule(offset, 0.5f, 0.3f);
+    sample->distance = sdfVerticalCapsule(offset, 0.5f + params->object_2_r, 0.3f + params->object_2_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);

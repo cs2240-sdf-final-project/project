@@ -5,6 +5,7 @@
 #include <string>
 #include <sys/stat.h>
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "hello.h"
@@ -22,6 +23,7 @@ int main(void) {
     render_image(&real, &gradient, params);
 
     FILE *freal = fopen("real.ppm", "w");
+    assert(freal);
     image_write_ppm(&real, freal);
 
     Image grad_slice = make_image(image_width, image_height);
@@ -30,6 +32,7 @@ int main(void) {
         filename << "debug-gradient/gradient_" << std::setw(3) << std::setfill('0') << p << ".ppm";
         std::string filename_string = filename.str();
         FILE *fgradient = fopen(filename_string.c_str(), "w");
+        assert(fgradient);
         gradient_image_slice(&grad_slice, &gradient, p);
         image_write_ppm(&grad_slice, fgradient);
     }
