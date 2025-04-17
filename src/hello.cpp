@@ -2,13 +2,21 @@
 #include <stdio.h>
 #include <stdio.h>
 #include <assert.h>
+#include <cctype>
+#include <math.h>
 #include "linmath.h"
-#include "sim_random.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include "hello.h"
 
 int enzyme_dup;
 int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
+
+// width of the scene band
+const float distance_threshold = 5e-2f;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -44,11 +52,6 @@ void ray_step(vec3 out, const vec3 origin, const vec3 direction, float t) {
 
 float clamp(float x, float min, float max) {
     return fmaxf(fminf(x, max), min);
-}
-
-void vec3_clamp(vec3 out, const vec3 x, const vec3 min, const vec3 max) {
-    vec3_min(out, x, max);
-    vec3_max(out, out, min);
 }
 
 void dehomogenize(vec3 out, const vec4 in) {
@@ -134,8 +137,7 @@ float sdfSphere(const vec3 pos) {
     return vec3_len(displacement) - 3.5f;
 }
 
-
-typedef struct {
+struct SceneParams {
     float object_1_x;
     float object_1_y;
     float object_1_z;
@@ -146,23 +148,82 @@ typedef struct {
     float object_2_z;
     float object_2_r;
     float object_2_h;
-} SceneParams;
+};
 
-void params_from_float_pointer(const float *params, SceneParams *out) {
-    out->object_1_x = params[0];
-    out->object_1_y = params[1];
-    out->object_1_z = params[2];
-    out->object_1_r = params[3];
-    out->object_1_h = params[4];
-    out->object_2_x = params[5];
-    out->object_2_y = params[6];
-    out->object_2_z = params[7];
-    out->object_2_r = params[8];
-    out->object_2_h = params[9];
+int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
+
+SceneParams *make_scene_params() {
+    SceneParams *out = (SceneParams *)calloc(sizeof(float), (size_t)number_of_scene_params);
+    assert(out);
+    return out;
 }
 
-const float *float_pointer_from_params(const SceneParams *out) {
-    return &out->object_1_x;
+void free_scene_params(SceneParams *params) {
+    free(params);
+}
+
+static inline SceneParams *params_from_float_pointer(const float *params) {
+    return (SceneParams *)params;
+}
+
+static const float *float_pointer_from_params(const SceneParams *out) {
+    return (float *)out;
+}
+
+static float *float_pointer_from_params(SceneParams *out) {
+    return (float *)out;
+}
+
+void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
+    float *raw_out_params = float_pointer_from_params(out_params);
+    const float *raw_a = float_pointer_from_params(a);
+    const float *raw_b = float_pointer_from_params(b);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = raw_a[i] + raw_b[i];
+    }
+}
+
+void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
+    float *raw_out_params = float_pointer_from_params(out_params);
+    const float *raw_a = float_pointer_from_params(a);
+    const float *raw_b = float_pointer_from_params(b);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = raw_a[i] * raw_b[i];
+    }
+}
+
+void outer_product_add_assign(SceneParamsPerChannel *ppc, const SceneParams *params, const vec3 rgb) {
+    const float *raw_params = float_pointer_from_params(params);
+    for (int c = 0; c < 3; c++) {
+        float *pc = float_pointer_from_params(ppc->rgb[c]);
+        for (int i = 0; i < number_of_scene_params; i++) {
+            pc[i] += raw_params[i] * rgb[c];
+        }
+    }
+}
+
+void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by) {
+    float *raw_out_params = float_pointer_from_params(out_params);
+    const float *raw_a = float_pointer_from_params(a);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = raw_a[i] * scale_by;
+    }
+}
+void scene_params_fill(SceneParams *params, float fill_with) {
+    float *raw_out_params = float_pointer_from_params(params);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out_params[i] = fill_with;
+    }
+}
+
+float scene_parameter_get(const SceneParams *params, long p) {
+    const float *raw_params = float_pointer_from_params(params);
+    return raw_params[p];
+}
+
+void scene_params_set(SceneParams *params, long p, float value) {
+    float *raw_params = float_pointer_from_params(params);
+    raw_params[p] = value;
 }
 
 typedef struct {
@@ -193,63 +254,35 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
     destination->shininess = b->shininess;
 }
 
-// static inline void object_foreground_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-//     vec3 offset = {-1.0, 1.0, 6.0};
-//     offset[0] += params->offset;
-//     vec3 pos1;
-//     vec3_add(pos1, pos, offset);
-//     sample->distance = sdfCylinder(pos1, 1.0f, 2.0f);
-//     vec3_set(sample->ambient, 0.1f);
-//     vec3 cDiffuse = {0.3f, 0.5f, 0.8f};
-//     vec3_dup(sample->diffuse, cDiffuse);
-// }
-
-
-// static inline void object_foreground(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-//     sample->distance = sdfVerticalCapsule(pos, 2.0, 1.0);
-//     vec3_set(sample->diffuse, 1.0f);
-//     vec3_set(sample->specular, 0.1f);
-// }
-
-// inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-//     default_scene_sample(sample);
-
-//     SdfResult working;
-
-//     default_scene_sample(&working);
-//     object_foreground_capsule(pos, params, &working);
-//     compose_scene_sample(sample, &working);
-
-//     default_scene_sample(&working);
-//     object_foreground(pos, params, &working);
-//     compose_scene_sample(sample, &working);
-// }
 static inline void object_cylinder(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    vec3 offset = {
+    vec3 doffset = {
         params->object_1_x,
         params->object_1_y,
         params->object_1_z};
-    vec3 pos_offset;
-    vec3_add(pos_offset, pos, offset);
-    sample->distance = sdfCylinder(pos_offset, params->object_1_r, params->object_1_h);
+    vec3 offset = {-0.4f, -0.2f, 0.2f};
+    vec3_add(offset, offset, pos);
+    vec3_add(offset, offset, doffset);
+    sample->distance = sdfCylinder(offset, 0.3f + params->object_1_r, 0.5f + params->object_1_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 static inline void object_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    vec3 offset = {
+    vec3 dpos = {
         params->object_2_x,
         params->object_2_y,
         params->object_2_z};
-    vec3 pos_offset;
-    vec3_add(pos_offset, pos, offset);
-    sample->distance = sdfVerticalCapsule(pos_offset, params->object_2_h, params->object_2_r);
+    vec3 offset = {0.4f, -0.3f, -0.5f};
+    vec3_add(offset, offset, pos);
+    vec3_add(offset, offset, dpos);
+    sample->distance = sdfVerticalCapsule(offset, 0.5f, 0.3f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 // Back:
 static inline void object_backwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {0.0, 0.0, 1.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
@@ -258,6 +291,7 @@ static inline void object_backwall(const vec3 pos, const SceneParams *params, Sd
 }
 // Ceiling:
 static inline void object_topwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {0.0, 1.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
@@ -266,6 +300,7 @@ static inline void object_topwall(const vec3 pos, const SceneParams *params, Sdf
 }
 // Left:
 static inline void object_leftwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {1.0, 0.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
@@ -274,6 +309,7 @@ static inline void object_leftwall(const vec3 pos, const SceneParams *params, Sd
 }
 // Right:
 static inline void object_rightwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {-1.0, 0.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.14f, 0.45f, 0.091f);
@@ -282,6 +318,7 @@ static inline void object_rightwall(const vec3 pos, const SceneParams *params, S
 }
 // Floor:
 static inline void object_bottomwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    (void)params;
     vec3 plane_normal = {0.0, -1.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
@@ -321,7 +358,6 @@ float scene_sample_sdf(const vec3 pos, const SceneParams *params) {
     return sample.distance;
 }
 
-
 float directional_derivative_inner(const vec3 origin, const vec3 direction, float t, const SceneParams *params) {
     vec3 scaled;
     vec3_scale(scaled, direction, t);
@@ -345,7 +381,6 @@ float directional_derivative(const vec3 pos, const vec3 direction, float t, cons
         enzyme_dup, t, dt,
         enzyme_const, params);
 }
-
 
 typedef struct {
     vec3 origin, direction;
@@ -394,8 +429,7 @@ typedef struct {
 void search_for_critical_point(const vec3 origin, const vec3 direction, const SceneParams *params, float t_min, float t_max, SearchResult *ret) {
     ret->found_critical_point = false;
     ret->t_if_found_critical_point = 0.0;
-    // width of the scene band
-    const float distance_threshold = 2e-1f;
+
     // we consider directional derivatives this large to be zero
     const float directional_derivative_threshold = 1e-1f;
     // we will bisect this many iterations in order to find the true location of the minimum directional derivative
@@ -420,9 +454,8 @@ void search_for_critical_point(const vec3 origin, const vec3 direction, const Sc
 }
 
 float sdf_normal_wrapper(const vec3 pos, const float *params) {
-    SceneParams scene_params;
-    params_from_float_pointer(params, &scene_params);
-    return scene_sample_sdf(pos, &scene_params);
+    SceneParams* scene_params = params_from_float_pointer(params);
+    return scene_sample_sdf(pos, scene_params);
 }
 
 extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, const float *);
@@ -437,6 +470,23 @@ void get_normal_from(vec3 normal, const vec3 pos, const SceneParams *params) {
         enzyme_const, raw_params
     );
     vec3_dup(normal, dpos);
+}
+
+float sdf_theta_wrapper(const vec3 pos, const float *params) {
+    SceneParams *scene_params = params_from_float_pointer(params);
+    return scene_sample_sdf(pos, scene_params);
+}
+
+extern void __enzyme_autodiff_theta(void *, int,const float *, int, const float *, float *);
+
+void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsIn) {
+    const float *raw_params = float_pointer_from_params(paramsIn);
+    float* draw_params = float_pointer_from_params(paramsOut);
+    __enzyme_autodiff_theta(
+        (void*)sdf_theta_wrapper,
+        enzyme_const, pos,
+        enzyme_dup, raw_params, draw_params
+    );
 }
 
 void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
@@ -476,12 +526,11 @@ typedef struct {
     float intersection_t;
 } IntersectionResult;
 
-void get_critical_point_along(
-    vec3 radiance,
+IntersectionResult trace_ray_get_critical_point(
+    SearchResult *critical_point,
     const vec3 origin,
     const vec3 direction,
-    const SceneParams *params,
-    RandomState *rng
+    const SceneParams *params
 ) {
     // we take steps at most this size in order to avoid missing
     // sign changes in the directional derivatives
@@ -490,138 +539,263 @@ void get_critical_point_along(
     const int number_of_steps = 1'000;
     // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
     const float contact_threshold = 1e-4f;
+
     float t = 0.0;
     float previous_t = 0.0;
-    SearchResult critical_point = { false, 0.0 };
-    IntersectionResult intersection = { false, 0.0 };
+    critical_point->found_critical_point = false;
+    IntersectionResult ret = { false, 0.0 };
     for (int i = 0; i < number_of_steps; i++) {
         float dir_previous_t = directional_derivative(origin, direction, previous_t, params);
         float dir_t = directional_derivative(origin, direction, t, params);
         // look for a sign change in the directional derivative
-        if (!critical_point.found_critical_point && ((dir_previous_t < 0) && (dir_t > 0))) {
-            // let's try to find critical_point between t and previous_t
-            SearchResult local_res;
-            search_for_critical_point(origin, direction, params, previous_t, t, &local_res);
-            if (local_res.found_critical_point) {
-                critical_point = local_res;
-            }
+        if (!critical_point->found_critical_point && ((dir_previous_t < 0) && (dir_t > 0))) {
+            // let's try to find critical_point between t and previous_t;
+            search_for_critical_point(origin, direction, params, previous_t, t, critical_point);
         }
         vec3 pos;
         ray_step(pos, origin, direction, t);
         float distance = scene_sample_sdf(pos, params);
         if (distance < contact_threshold) {
-            intersection.found_intersection = true;
-            intersection.intersection_t = t;
+            ret.found_intersection = true;
+            ret.intersection_t = t;
             break;
         }
         float step_size = fminf(max_step_size, distance);
         previous_t = t;
         t += step_size;
     }
-    if (intersection.found_intersection) {
-        vec3 current_position;
-        ray_step(current_position, origin, direction, intersection.intersection_t);
-        SdfResult sample;
-        scene_sample(current_position, params, &sample);
-        vec3 normal;
-        get_normal_from(normal, current_position, params);
-        phongLight(radiance, direction, normal, &sample);
-    } else {
-        // uncomment for debug colors
-        // vec3 red = {1.0f, 0.0f, 0.0f};
-        vec3 black = {0.0f, 0.0f, 0.0f};
-        float *which;
-        if (critical_point.found_critical_point) {
-            which = black; // make this red for debug colors
-        } else {
-            which = black;
-        }
-        vec3_dup(radiance, which);
-    }
+    return ret;
 }
 
-void render_get_radiance(
+void get_radiance_at(
     vec3 radiance,
+    const IntersectionResult *intersection,
     const vec3 origin,
     const vec3 direction,
-    const SceneParams *params,
-    RandomState *rng
+    const SceneParams *params
 ) {
-    vec3_set(radiance, 0.0);
+    if (!intersection->found_intersection) {
+        vec3_set(radiance, 0.f);
+        return;
+    }
     vec3 current_position;
-    vec3_dup(current_position, origin);
-    for (int i = 0; i < 100; i++) {
-        float distance = scene_sample_sdf(current_position, params);
-        if (distance < 1e-4f) {
-            SdfResult sample;
-            scene_sample(current_position, params, &sample);
-            vec3 normal;
-            get_normal_from(normal, current_position, params);
-            phongLight(radiance, direction, normal, &sample);
-            break;
-        } else {
-            ray_step(current_position, current_position, direction, distance);
+    ray_step(current_position, origin, direction, intersection->intersection_t);
+    SdfResult sample;
+    scene_sample(current_position, params, &sample);
+    vec3 normal;
+    get_normal_from(normal, current_position, params);
+    phongLight(radiance, direction, normal, &sample);
+}
+
+
+GradientImage make_gradient_image(long image_width, long image_height) {
+    const long num_subpixels = 3;
+    long num_floats = number_of_scene_params * image_width * image_height * num_subpixels;
+    float *buf = (float *)calloc(sizeof(float), (size_t)num_floats);
+    assert(buf);
+    GradientStrides strides;
+    strides.parameter_stride = 1;
+    strides.subpixel_stride = number_of_scene_params;
+    strides.col_stride = number_of_scene_params * num_subpixels;
+    strides.row_stride = number_of_scene_params * num_subpixels * image_width;
+    GradientImage ret;
+    ret.strides = strides;
+    ret.image_height = image_height;
+    ret.image_width = image_width;
+    ret.num_subpixels = 3;
+    ret.buf = buf;
+    return ret;
+}
+
+void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no) {
+    SceneParamsPerChannel ppc;
+    for (int ch = 0; ch < 3; ch++) {
+        ppc.rgb[ch] = make_scene_params();
+    }
+    for (long r = 0; r < image->image_height; r++) {
+        for (long c = 0; c < image->image_height; c++) {
+            gradient_image_get(&ppc, gradient, r, c);
+
+            vec3 radiance;
+            for (int ch = 0; ch < 3; ch++) {
+                float param_value = scene_parameter_get(ppc.rgb[ch], parameter_no);
+                radiance[ch] = param_value;
+            }
+            vec3 half;
+            vec3_set(half, 0.5f);
+            vec3_scale(radiance, radiance, 0.5f);
+            vec3_add(radiance, radiance, half);
+            image_set(image, r, c, radiance);
+        }
+    }
+    for (int ch = 0; ch < 3; ch++) {
+        free_scene_params(ppc.rgb[ch]);
+    }
+}
+
+void free_gradient_image(GradientImage *image) {
+    free(image->buf);
+}
+
+static inline long gradient_image_get_index(const GradientStrides *s, long r, long c, long subpixel, long param) {
+    return r * s->row_stride + c * s->col_stride + subpixel * s->subpixel_stride + param * s->parameter_stride;
+}
+
+void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic) {
+    for (long subpixel = 0; subpixel < 3; subpixel++) {
+        const SceneParams *params = ppc->rgb[subpixel];
+        const float *raw_params = float_pointer_from_params(params);
+        for (long p = 0; p < number_of_scene_params; p++) {
+            long index = gradient_image_get_index(&image->strides, ir, ic, subpixel, p);
+            image->buf[index] = raw_params[p];
         }
     }
 }
 
-void render_get_radiance_wrapper(vec3 radiance, RandomState *rng, const vec3 origin, const vec3 direction, const float *raw_params) {
-    SceneParams params;
-    params_from_float_pointer(raw_params, &params);
-    get_critical_point_along(radiance, origin, direction, &params, rng);
+void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic) {
+    for (long subpixel = 0; subpixel < 3; subpixel++) {
+        SceneParams *params = ppc->rgb[subpixel];
+        float *raw_params = float_pointer_from_params(params);
+        for (long p = 0; p < number_of_scene_params; p++) {
+            long index = gradient_image_get_index(&image->strides, ir, ic, subpixel, p);
+            raw_params[p] = image->buf[index];
+        }
+    }
 }
 
-extern void __enzyme_fwddiff_radiance(void *, int, float *, float *, int, RandomState *, int, const vec3, int, const vec3, int, const float *, const float *);
-
-void render_get_gradient_helper(vec3 real, vec3 gradient, RandomState *rng, const vec3 origin, const vec3 direction) {
-    SceneParams params;
-    params.object_1_x = -0.4f;
-    params.object_1_y = -0.2f;
-    params.object_1_z = 0.2f;
-    params.object_1_r = 0.3f;
-    params.object_1_h = 0.8f;
-    params.object_2_x = 0.4f;
-    params.object_2_y = -0.3f;
-    params.object_2_z = -0.5f;
-    params.object_2_r = 0.3f;
-    params.object_2_h = 0.5f;
-    const float *raw_params = float_pointer_from_params(&params);
-    float d_param = 1.f;
-
-    vec3 radiance;
-    vec3_set(radiance, 1.f);
-    vec3 d_radiance;
-    vec3_set(d_radiance, 1.f);
-
-    __enzyme_fwddiff_radiance(
-        (void*)render_get_radiance_wrapper,
-        enzyme_dup, radiance, d_radiance,
-        enzyme_const, rng,
-        enzyme_const, origin,
-        enzyme_const, direction,
-        enzyme_dupnoneed, raw_params, &d_param);
-
-    vec3_dup(real, radiance);
-    vec3_dup(gradient, d_radiance);
+void render_get_radiance_wrapper(
+    vec3 radiance,
+    const IntersectionResult *intersection,
+    const vec3 origin,
+    const vec3 direction,
+    const float *raw_params
+) {
+    const SceneParams *params = params_from_float_pointer(raw_params);
+    get_radiance_at(radiance, intersection, origin, direction, params);
 }
 
-typedef struct {
-    long row_stride;
-    long col_stride;
-    long subpixel_stride;
-} Strides;
+extern void __enzyme_fwddiff_radiance(
+    void *,
+    int, float *, float *,
+    int, const IntersectionResult *,
+    int, const float *,
+    int, const float *,
+    int, const float *, const float *
+);
+
+void render_pixel(
+    vec3 real,
+    const vec3 origin,
+    const vec3 direction,
+    SceneParamsPerChannel *params_per_channel,
+    const SceneParams *params
+) {
+    SceneParams *dummy_params = make_scene_params();
+    SearchResult critical_point;
+    IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
+
+    for (int p = 0; p < number_of_scene_params; p++) {
+        vec3 radiance;
+        vec3_set(radiance, 1.f);
+        vec3 d_radiance;
+        vec3_set(d_radiance, 1.f);
+
+        const float *raw_params = float_pointer_from_params(params);
+        scene_params_fill(dummy_params, 0.f);
+        scene_params_set(dummy_params, p, 1.f);
+        const float *raw_dummy_params = float_pointer_from_params(dummy_params);
+
+        __enzyme_fwddiff_radiance(
+            (void*)render_get_radiance_wrapper,
+            enzyme_dup, radiance, d_radiance,
+            enzyme_const, &intersection,
+            enzyme_const, origin,
+            enzyme_const, direction,
+            enzyme_dup, raw_params, raw_dummy_params
+        );
+
+        for (int ch = 0; ch < 3; ch++) {
+            scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
+        }
+    }
+
+    get_radiance_at(real, &intersection, origin, direction, params);
+
+    if(critical_point.found_critical_point) {
+        vec3 y_star;
+        ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
+        SdfResult sample;
+        scene_sample(y_star, params, &sample);
+        vec3 normal;
+        get_normal_from(normal, y_star, params);
+        vec3 y_star_radiance;
+        phongLight(y_star_radiance, direction, normal, &sample);
+        diff_sdf(y_star, dummy_params, params);
+        vec3 deltaL;
+        vec3_sub(deltaL, y_star_radiance, real);
+        vec3_scale(deltaL, deltaL, 1 / distance_threshold);
+        outer_product_add_assign(params_per_channel, dummy_params, deltaL);
+    }
+    free_scene_params(dummy_params);
+}
+
+
 
 long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
 }
 
-typedef struct {
-    Strides strides;
-    long image_width;
-    long image_height;
-    long num_bytes;
-    char *buf;
-} Image;
+//////////////////////////////////////
+// Begin PPM Parser from ChatGPT /////
+void skip_whitespace_and_comments(FILE *f) {
+    int c;
+    while ((c = fgetc(f)) != EOF) {
+        if (c == '#') {
+            // Skip the comment line
+            while ((c = fgetc(f)) != '\n' && c != EOF);
+        } else if (!isspace(c)) {
+            ungetc(c, f);
+            break;
+        }
+    }
+}
+int image_read_bpm(Image *image, FILE *f) {
+    char header[3];
+    if (fscanf(f, "%2s", header) != 1 || strcmp(header, "P6") != 0) {
+        fprintf(stderr, "Unsupported or invalid PPM format\n");
+        return 0;
+    }
+    skip_whitespace_and_comments(f);
+    if (fscanf(f, "%ld", &image->image_width) != 1) return 0;
+
+    skip_whitespace_and_comments(f);
+    if (fscanf(f, "%ld", &image->image_height) != 1) return 0;
+
+    skip_whitespace_and_comments(f);
+    int maxval;
+    if (fscanf(f, "%d", &maxval) != 1 || maxval != 255) {
+        fprintf(stderr, "Unsupported max color value (only 255 supported)\n");
+        return 0;
+    }
+    // Skip the single whitespace character after maxval
+    fgetc(f);
+    image->num_bytes = image->image_width * image->image_height * 3;
+    image->buf = (char *)malloc((size_t)image->num_bytes);
+    if (!image->buf) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return 0;
+    }
+    size_t bytes_read = fread(image->buf, 1, (size_t)image->num_bytes, f);
+    if (bytes_read != (size_t)image->num_bytes) {
+        fprintf(stderr, "Failed to read image data\n");
+        free(image->buf);
+        image->buf = NULL;
+        return 0;
+    }
+    return 1; // success
+}
+// End PPM Parser from ChatGPT ///////
+//////////////////////////////////////
 
 Image make_image(long image_width, long image_height) {
     Image image;
@@ -646,7 +820,7 @@ void free_image(Image *image) {
 }
 
 // https://nullprogram.com/blog/2017/11/03/
-void image_write_bpm(Image *image, FILE *f) {
+void image_write_ppm(Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
     assert(image->num_bytes > 0);
     fwrite(image->buf, 1, (size_t)image->num_bytes, f);
@@ -665,7 +839,19 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     }
 }
 
-void render_image(Image *real, Image *gradient, RandomState *rng) {
+void image_get(vec3 radiance, Image *image, long ir, long ic) {
+    assert(ir >= 0);
+    assert(ir < image->image_height);
+    assert(ic >= 0);
+    assert(ic < image->image_width);
+    for (long p = 0; p < 3; p++) {
+        long index = get_index(&image->strides, ir, ic, p);
+        char value = image->buf[index];
+        radiance[p] = (float)value / 255.f;
+    }
+}
+
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
@@ -686,10 +872,15 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
 
+    SceneParamsPerChannel ppc;
+    for (int c = 0; c < 3; c++) {
+        ppc.rgb[c] = make_scene_params();
+    }
+
     for (long ir = 0; ir < real->image_height; ir++) {
-        if (ir % 50 == 0) {
-            printf("on row %ld\n", ir);
-        }
+        // if (ir % 50 == 0) {
+        //     printf("on row %ld\n", ir);
+        // }
         for (long ic = 0; ic < real->image_width; ic++) {
             float r = (float)ir;
             float c = (float)ic;
@@ -707,34 +898,16 @@ void render_image(Image *real, Image *gradient, RandomState *rng) {
             vec3_sub(direction, far, camera_position);
             vec3_norm(direction, direction);
 
+            // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            vec3 out_gradient;
-            // SceneParams params;
-            // params.offset = 0.0f;
-            render_get_gradient_helper(out_real, out_gradient, rng, camera_position, direction);
+            render_pixel(out_real, camera_position, direction, &ppc, params);
 
             image_set(real, ir, ic, out_real);
-            vec3_scale(out_gradient, out_gradient, 0.5);
-            vec3 half = {0.5, 0.5, 0.5};
-            vec3_add(out_gradient, out_gradient, half);
-            image_set(gradient, ir, ic, out_gradient);
+            gradient_image_set(&ppc, gradient, ir, ic);
         }
     }
-}
 
-int main(int argc, char *argv[]) {
-    FILE *freal = fopen("real.bpm", "w");
-    FILE *fgradient = fopen("gradient.bpm", "w");
-
-    long image_width = 500;
-    long image_height = 500;
-    Image real = make_image(image_width, image_height);
-    Image gradient = make_image(image_width, image_height);
-
-    RandomState rng = make_random();
-    render_image(&real, &gradient, &rng);
-    image_write_bpm(&real, freal);
-    image_write_bpm(&gradient, fgradient);
-    free_image(&real);
-    free_image(&gradient);
+    for (int c = 0; c < 3; c++) {
+        free_scene_params(ppc.rgb[c]);
+    }
 }

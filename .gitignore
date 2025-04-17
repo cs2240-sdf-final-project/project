@@ -1,6 +1,13 @@
 build/*.ll
 build/*.exe
+build/*.o
+
+debug-gradient/*.ppm
+descent-sequence/*.ppm
+
 .vscode
 *.bpm
 **/.DS_Store
 temp/*
+
+.DS_Store
