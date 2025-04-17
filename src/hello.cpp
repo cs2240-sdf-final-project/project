@@ -106,11 +106,11 @@ float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     return dist;
 }
 
-float sdfTriPrism(const vec3 orgin, float h0, float h1) {
+float sdfTriPrism(const vec3 origin, float h0, float h1) {
     //h[0] represents half the length of the base of the triangular prism
     //h[1] represents half the height of the prism along the z-axis
     vec3 pos;
-    vec3_dup(pos, orgin);
+    vec3_dup(pos, origin);
 
     vec3 q = {fabsf(pos[0]), fabsf(pos[1]), fabsf(pos[2])};
     float dist = fmaxf(q[2] - h1, fmaxf(q[0] * 0.866025f + pos[1] * 0.5f, -pos[1]) - h0 * 0.5f);
@@ -206,9 +206,21 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
 //     object_foreground(pos, params, &working);
 //     compose_scene_sample(sample, &working);
 // }
-
-static inline void object_foreground(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    sample->distance = sdfVerticalCapsule(pos, 0.7f, 0.4f);
+static inline void object_cylinder(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 offset = {-0.4f, -0.2f, 0.2f};
+    offset[0] += params->offset;
+    vec3 pos_offset;
+    vec3_add(pos_offset, pos, offset);
+    sample->distance = sdfCylinder(pos_offset, 0.3f, 0.9f);
+    vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
+}
+static inline void object_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+    vec3 offset = {0.4f, -0.3f, -0.5f};
+    vec3 pos_offset;
+    vec3_add(pos_offset, pos, offset);
+    sample->distance = sdfVerticalCapsule(pos_offset, 0.5f, 0.3f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -257,7 +269,10 @@ inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *s
     default_scene_sample(sample);
     SdfResult working;
     default_scene_sample(&working);
-    object_foreground(pos, params, &working);
+    object_cylinder(pos, params, &working);
+    compose_scene_sample(sample, &working);
+    default_scene_sample(&working);
+    object_capsule(pos, params, &working);
     compose_scene_sample(sample, &working);
     default_scene_sample(&working);
     object_backwall(pos, params, &working);
