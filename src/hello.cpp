@@ -540,7 +540,7 @@ static inline void params_per_channel_fill(SceneParamsPerChannel *ppc, float fil
     }
 }
 
-inline void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic) {
+void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic) {
     for (long subpixel = 0; subpixel < 3; subpixel++) {
         const SceneParams *params = ppc->rgb[subpixel];
         const float *raw_params = float_pointer_from_params(params);
@@ -551,7 +551,7 @@ inline void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *
     }
 }
 
-inline void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic) {
+void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic) {
     for (long subpixel = 0; subpixel < 3; subpixel++) {
         SceneParams *params = ppc->rgb[subpixel];
         float *raw_params = float_pointer_from_params(params);

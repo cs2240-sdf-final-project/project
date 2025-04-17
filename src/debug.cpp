@@ -9,7 +9,6 @@
 #include "hello.h"
 
 int main(void) {
-
     long image_width = 500;
     long image_height = 500;
     Image real = make_image(image_width, image_height);

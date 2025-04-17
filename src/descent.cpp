@@ -1,12 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "hello.h"
 #include <sys/stat.h>
+
+#include "hello.h"
+
+float gradient_scaling_factor(long image_width, long image_height) {
+    long size = image_width * image_height * 3;
+    return 1.f / (float)size;
+}
 
 float mse_loss(Image *real, Image *groundtruth) {
     float loss = 0.f;
-    float count = 0.f;
     for (long ir = 0; ir < real->image_height; ir++) {
         for (long ic = 0; ic < real->image_width; ic++) {
             vec3 radiance_groundtruth;
@@ -18,11 +23,9 @@ float mse_loss(Image *real, Image *groundtruth) {
             vec3 squared_error = {powf(error[0], 2), powf(error[1], 2), powf(error[2], 2)};
             float squared_error_avg = squared_error[0] + squared_error[1] + squared_error[2];
             loss += squared_error_avg;
-            count += 3.f;
         }
     }
-    loss /= count;
-    return loss;
+    return loss * gradient_scaling_factor(real->image_width, real->image_height);
 }
 
 void mse_loss_deriv(Image *real, Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv) {
@@ -32,6 +35,8 @@ void mse_loss_deriv(Image *real, Image *groundtruth, GradientImage *gradient, Sc
     for (int c = 0; c < 3; c++) {
         ppc.rgb[c] = make_scene_params();
     }
+
+    float factor = gradient_scaling_factor(real->image_width, real->image_height);
 
     for (long ir = 0; ir < real->image_height; ir++) {
         for (long ic = 0; ic < real->image_width; ic++) {
@@ -46,12 +51,17 @@ void mse_loss_deriv(Image *real, Image *groundtruth, GradientImage *gradient, Sc
             vec3 error;
             vec3_sub(error, pixel_real, pixel_groundtruth);
             vec3_scale(error, error, 2.f);
+            vec3_scale(error, error, factor);
 
-            for (int p = 0; p < 3; p++) {
-                scene_params_scale(ppc.rgb[p], ppc.rgb[p], error[p] * (1.f / 3.0));
-                scene_params_elementwise_add(loss_deriv, loss_deriv, ppc.rgb[p]);
+            for (int ch = 0; ch < 3; ch++) {
+                scene_params_scale(ppc.rgb[ch], ppc.rgb[ch], error[ch]);
+                scene_params_elementwise_add(loss_deriv, loss_deriv, ppc.rgb[ch]);
             }
         }
+    }
+
+    for (int ch = 0; ch < 3; ch++) {
+        free_scene_params(ppc.rgb[ch]);
     }
 }
 
@@ -105,7 +115,6 @@ int main(void) {
         FILE *freal = fopen(fn_real, "w");
         char fn_gradient[256];
         snprintf(fn_gradient, sizeof(fn_gradient), "temp/gradient_%04d.ppm", epoch);
-        FILE *fgradient = fopen(fn_gradient, "w");
         image_write_bpm(&real, freal);
     }
 
