@@ -80,6 +80,7 @@ void vec2_abs(vec2 out, const vec2 in) {
     }
 }
 
+
 float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
     xz[0] = pos[0];
@@ -174,6 +175,16 @@ void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a,
     const float *raw_b = float_pointer_from_params(b);
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_out_params[i] = raw_a[i] * raw_b[i];
+    }
+}
+
+void outer_product_add_assign(SceneParamsPerChannel *ppc, const SceneParams *params, const vec3 rgb) {
+    const float *raw_params = float_pointer_from_params(params);
+    for (int c = 0; c < 3; c++) {
+        float *pc = float_pointer_from_params(ppc->rgb[c]);
+        for (int i = 0; i < number_of_scene_params; i++) {
+            pc[i] += raw_params[i] * rgb[c];
+        }
     }
 }
 
@@ -551,12 +562,6 @@ static inline long gradient_image_get_index(const GradientStrides *s, long r, lo
     return r * s->row_stride + c * s->col_stride + subpixel * s->subpixel_stride + param * s->parameter_stride;
 }
 
-static inline void params_per_channel_fill(SceneParamsPerChannel *ppc, float fill_with) {
-    for (int i = 0; i < 3; i++) {
-        scene_params_fill(ppc->rgb[i], fill_with);
-    }
-}
-
 void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic) {
     for (long subpixel = 0; subpixel < 3; subpixel++) {
         const SceneParams *params = ppc->rgb[subpixel];
@@ -638,35 +643,32 @@ void render_pixel(
 
     free_scene_params(dummy_params);
 
-    vec3_set(real, 0.0f);
-    if (intersection.found_intersection) {
-        get_radiance_at(real, &intersection, origin, direction, params);
-    }
+    get_radiance_at(real, &intersection, origin, direction, params);
 
     // if(critical_point.found_critical_point) {
-    //     vec3 y_star;
-    //     ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
-    //     SdfResult sample;
-    //     scene_sample(y_star, params, &sample);
-    //     vec3 normal;
-    //     get_normal_from(normal, y_star, params);
+    // vec3 y_star;
+    // ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
+    // SdfResult sample;
+    // scene_sample(y_star, params, &sample);
+    // vec3 normal;
+    // get_normal_from(normal, y_star, params);
 
-    //     vec3 y_star_radiance;
-    //     phongLight(y_star_radiance, direction, normal, &sample);
+    // vec3 y_star_radiance;
+    // phongLight(y_star_radiance, direction, normal, &sample);
 
-    //     // diff_sdf(y_star, paramOut, params);
+    // SceneParams* paramOut;
 
-    //     // vec3 deltaL;
-    //     // vec3_sub(deltaL, y_star_radiance, radiance);
+    // diff_sdf(y_star, paramOut, params);
 
-    //     // vec3 boundary_integral;
-    //     // vec3_set(boundary_integral, 0.0f);
-    //     // TODO: figure this out with the matrix multiply
-    //     // vec3_scale(boundary_integral, deltaL, - vn / distance_threshold);
+    // vec3 deltaL;
+    // vec3_sub(deltaL, y_star_radiance, radiance);
+    // vec3_scale(deltaL, deltaL, 1 / distance_threshold);
 
-    //     // vec3_add(d_radiance, d_radiance, boundary_integral);
+    // outer_product_add_assign(params_per_channel , paramOut , deltaL);
     // }
 }
+
+
 
 long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
