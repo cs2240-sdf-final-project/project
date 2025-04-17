@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include "linmath.h"
 
+static const int number_of_scene_params = 1;
+
 typedef struct {
     float offset;
 } SceneParams;
@@ -24,10 +26,12 @@ typedef struct {
 
 SceneParams *make_scene_params();
 void free_scene_params(SceneParams *params);
+float scene_parameter_get(const SceneParams *params, long p);
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
 void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a, const SceneParams *b);
 void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by);
 void scene_params_fill(SceneParams *params, float fill_with);
+
 
 void params_increment(SceneParams &params);
 Image make_image(long image_width, long image_height);
@@ -66,5 +70,6 @@ void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, 
 void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic);
 
 void render_image(Image *real, GradientImage *gradient, const SceneParams *params);
+void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no);
 
 #endif // HELLO_H

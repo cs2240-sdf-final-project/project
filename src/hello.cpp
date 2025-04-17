@@ -137,8 +137,6 @@ float sdfSphere(const vec3 pos) {
     return vec3_len(displacement) - 3.5f;
 }
 
-static const int number_of_scene_params = 1;
-
 SceneParams *make_scene_params() {
     SceneParams *out = (SceneParams *)calloc(sizeof(float), (size_t)number_of_scene_params);
     assert(out);
@@ -159,6 +157,11 @@ static const float *float_pointer_from_params(const SceneParams *out) {
 
 static float *float_pointer_from_params(SceneParams *out) {
     return &out->offset;
+}
+
+float scene_parameter_get(const SceneParams *params, long p) {
+    const float *raw_params = float_pointer_from_params(params);
+    return raw_params[p];
 }
 
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
@@ -182,7 +185,6 @@ void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a,
 void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by) {
     float *raw_out_params = float_pointer_from_params(out_params);
     const float *raw_a = float_pointer_from_params(a);
-    const float *raw_b = float_pointer_from_params(b);
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_out_params[i] = raw_a[i] * scale_by;
     }
@@ -496,6 +498,32 @@ GradientImage make_gradient_image(long image_width, long image_height) {
     ret.num_subpixels = 3;
     ret.buf = buf;
     return ret;
+}
+
+void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no) {
+    SceneParamsPerChannel ppc;
+    for (int ch = 0; ch < 3; ch++) {
+        ppc.rgb[ch] = make_scene_params();
+    }
+    for (long r = 0; r < image->image_height; r++) {
+        for (long c = 0; c < image->image_height; c++) {
+            gradient_image_get(&ppc, gradient, r, c);
+
+            vec3 radiance;
+            for (int ch = 0; ch < 3; ch++) {
+                float param_value = scene_parameter_get(ppc.rgb[ch], parameter_no);
+                radiance[ch] = param_value;
+            }
+            vec3 half;
+            vec3_set(half, 0.5f);
+            vec3_scale(radiance, radiance, 0.5f);
+            vec3_add(radiance, radiance, half);
+            image_set(image, r, c, radiance);
+        }
+    }
+    for (int ch = 0; ch < 3; ch++) {
+        free_scene_params(ppc.rgb[ch]);
+    }
 }
 
 void free_gradient_image(GradientImage *image) {

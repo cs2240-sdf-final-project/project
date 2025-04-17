@@ -16,7 +16,7 @@ run-descent: build/descent.exe
 	convert -delay 10 -loop 1 $(shell echo temp/gradient_*.ppm) gradient.gif
 
 build/debug.exe: src/debug.cpp build/hello.o
-	clang-16 $^ $(FLAGS) -lm -o $@
+	clang++-16 $^ $(FLAGS) -o $@
 
 build/descent.exe: src/descent.cpp build/hello.o
 	clang-16 $^ $(FLAGS) -lm -o $@
