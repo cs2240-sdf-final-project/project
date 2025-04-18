@@ -300,7 +300,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, Sdf
     vec3_add(offset, offset, dpos);
     sample->distance = sdfVerticalCapsule(offset, 0.5f + params->object_2_r, 0.3f + params->object_2_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
-    // vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 // Back:
@@ -317,7 +317,7 @@ static inline void object_topwall(const vec3 pos, const SceneParams *params, Sdf
     (void)params;
     vec3 plane_normal = {0.0, 1.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
-    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    // vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
@@ -874,12 +874,13 @@ void render_pixel(
     //     }
     // }
 
-    int count = 10;
+    int count = 1000;
     for (int i = 0; i < count; i++) {
         vec3 radiance;
         Path path = get_path(rng, origin, direction, params);
         accumulate_radiance_along_path(radiance, &path, params);
         vec3_add(real, real, radiance);
+        free_path(&path);
     }
     vec3_scale(real, real, 1.0f / (float)count);
 
