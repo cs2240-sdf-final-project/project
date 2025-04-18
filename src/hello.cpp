@@ -9,14 +9,25 @@
 #include <sys/types.h>
 
 #include "hello.h"
+#include "sim_random.h"
 
 int enzyme_dup;
 int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
 
+
+const float path_continuation_prob = 0.8f;
+
 // width of the scene band
 const float distance_threshold = 5e-2f;
+// we take steps at most this size in order to avoid missing
+// sign changes in the directional derivatives
+const float max_step_size = 1.0f;
+// take this many steps to balance performance with exploring the entire scene
+const int number_of_steps = 1'000;
+// if our sdf gets smaller than this amount, we will consider it an intersection with the surface
+const float contact_threshold = 1e-4f;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -62,6 +73,12 @@ void dehomogenize(vec3 out, const vec4 in) {
 
 float lerp(float x, float in_min, float in_max, float out_min, float out_max) {
     return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min);
+}
+
+void vec3_componentwise_mul(vec3 out, const vec3 a, const vec3 b) {
+    for (int i = 0; i < 3; i++) {
+        out[i] = a[i] * b[i];
+    }
 }
 
 void vec3_set(vec3 out, float value) {
@@ -532,14 +549,6 @@ IntersectionResult trace_ray_get_critical_point(
     const vec3 direction,
     const SceneParams *params
 ) {
-    // we take steps at most this size in order to avoid missing
-    // sign changes in the directional derivatives
-    const float max_step_size = 1.0f;
-    // take this many steps to balance performance with exploring the entire scene
-    const int number_of_steps = 1'000;
-    // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
-    const float contact_threshold = 1e-4f;
-
     float t = 0.0;
     float previous_t = 0.0;
     critical_point->found_critical_point = false;
@@ -567,26 +576,143 @@ IntersectionResult trace_ray_get_critical_point(
     return ret;
 }
 
-void get_radiance_at(
-    vec3 radiance,
-    const IntersectionResult *intersection,
-    const vec3 origin,
-    const vec3 direction,
-    const SceneParams *params
-) {
-    if (!intersection->found_intersection) {
-        vec3_set(radiance, 0.f);
-        return;
-    }
-    vec3 current_position;
-    ray_step(current_position, origin, direction, intersection->intersection_t);
-    SdfResult sample;
-    scene_sample(current_position, params, &sample);
-    vec3 normal;
-    get_normal_from(normal, current_position, params);
-    phongLight(radiance, direction, normal, &sample);
+typedef struct {
+    float init_pos[3];
+    float init_dir[3];
+    long segment_count;
+    float (* pos)[3];
+    float (* dir)[3];
+    float (* filter)[3];
+} Path;
+
+Path make_path(long segment_count, const vec3 initial_pos, const vec3 initial_dir) {
+    Path ret = {0};
+    ret.pos = (float (*)[3])calloc((size_t)segment_count, 3 * sizeof(float));
+    ret.dir = (float (*)[3])calloc((size_t)segment_count, 3 * sizeof(float));
+    ret.filter = (float (*)[3])calloc((size_t)segment_count, 3 * sizeof(float));
+    assert(ret.pos);
+    assert(ret.dir);
+    assert(ret.filter);
+    ret.segment_count = segment_count;
+    vec3_dup(ret.init_pos, initial_pos);
+    vec3_dup(ret.init_dir, initial_dir);
+    return ret;
 }
 
+long path_segment_count(const Path *path) {
+    return path->segment_count;
+}
+
+void path_truncate(Path *path, long new_segment_count) {
+    path->segment_count = new_segment_count;
+}
+
+void path_set(Path *path, const vec3 pos, const vec3 dir, float sample_pdf, long path_index) {
+    vec3_dup(path->pos[path_index], pos);
+    vec3_dup(path->dir[path_index], dir);
+    vec3_set(path->filter[path_index], sample_pdf);
+}
+
+void path_get_init(const Path *path, vec3 pos, vec3 dir) {
+    vec3_dup(pos, path->init_pos);
+    vec3_dup(dir, path->init_dir);
+}
+
+void path_get(const Path *path, vec3 pos, vec3 dir, vec3 filter, long path_index) {
+    vec3_dup(pos, path->pos[path_index]);
+    vec3_dup(dir, path->dir[path_index]);
+    vec3_dup(filter, path->filter[path_index]);
+}
+
+void free_path(Path *path) {
+    free(path->pos);
+    free(path->dir);
+    free(path->filter);
+}
+
+IntersectionResult trace_ray_get_intersection(
+    const vec3 init_pos,
+    const vec3 init_dir,
+    const SceneParams *params
+) {
+    float t = 0.0;
+    IntersectionResult ret = { false, 0.0 };
+    for (int i = 0; i < number_of_steps; i++) {
+        vec3 pos;
+        ray_step(pos, init_pos, init_dir, t);
+        float distance = scene_sample_sdf(pos, params);
+        if (distance < contact_threshold) {
+            ret.found_intersection = true;
+            ret.intersection_t = t;
+            break;
+        }
+        float step_size = fminf(max_step_size, distance);
+        t += step_size;
+    }
+    return ret;
+}
+
+Path get_path(
+    RandomState *rng,
+    const vec3 init_pos,
+    const vec3 init_dir,
+    const SceneParams *params
+) {
+    long segment_count = sample_binomial(path_continuation_prob, rng);
+    Path path = make_path(segment_count, init_pos, init_dir);
+    vec3 pos;
+    vec3_dup(pos, init_pos);
+    vec3 dir;
+    vec3_dup(dir, init_dir);
+    for (long i = 0; i < segment_count; i++) {
+        IntersectionResult res = trace_ray_get_intersection(pos, dir, params);
+        if (!res.found_intersection) {
+            path_truncate(&path, i);
+            break;
+        }
+        ray_step(pos, pos, dir, res.intersection_t);
+        vec3 normal;
+        get_normal_from(normal, pos, params);
+        vec3_reflect(dir, dir, normal);
+        vec3_norm(dir, dir);
+        float hemisphere_pdf = 2.f * M_PI;// this is wrong now since it just reflects
+        float continue_prob = 1.f / path_continuation_prob;
+        path_set(&path, pos, dir, hemisphere_pdf * continue_prob, i);
+    }
+    return path;
+}
+
+void accumulate_radiance_along_path(
+    vec3 accumulated_radiance,
+    const Path *path,
+    const SceneParams *params
+) {
+    vec3_set(accumulated_radiance, 0.f);
+    vec3 accumulated_filter;
+    vec3_set(accumulated_filter, 1.0f);
+
+    vec3 pos;
+    vec3 dir;
+    path_get_init(path, pos, dir);
+
+    long num_iters = path_segment_count(path);
+    for (int i = 0; i < num_iters; i++) {
+        SdfResult sample;
+        scene_sample(pos, params, &sample);
+        vec3 normal;
+        get_normal_from(normal, pos, params);
+
+        vec3 radiance_add;
+        phongLight(radiance_add, dir, normal, &sample);
+        vec3_componentwise_mul(radiance_add, radiance_add, accumulated_filter);
+        vec3_add(accumulated_radiance, accumulated_radiance, radiance_add);
+
+        vec3 filter_mul;
+        path_get(path, pos, dir, filter_mul, i);
+
+        vec3_componentwise_mul(accumulated_filter, accumulated_filter, filter_mul);
+    }
+}
 
 GradientImage make_gradient_image(long image_width, long image_height) {
     const long num_subpixels = 3;
@@ -664,22 +790,18 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
 }
 
 void render_get_radiance_wrapper(
-    vec3 radiance,
-    const IntersectionResult *intersection,
-    const vec3 origin,
-    const vec3 direction,
+    vec3 accumulated_radiance,
+    const Path *path,
     const float *raw_params
 ) {
     const SceneParams *params = params_from_float_pointer(raw_params);
-    get_radiance_at(radiance, intersection, origin, direction, params);
+    accumulate_radiance_along_path(accumulated_radiance, path, params);
 }
 
 extern void __enzyme_fwddiff_radiance(
     void *,
     int, float *, float *,
-    int, const IntersectionResult *,
-    int, const float *,
-    int, const float *,
+    int, const Path *,
     int, const float *, const float *
 );
 
@@ -688,11 +810,14 @@ void render_pixel(
     const vec3 origin,
     const vec3 direction,
     SceneParamsPerChannel *params_per_channel,
-    const SceneParams *params
+    const SceneParams *params,
+    RandomState *rng
 ) {
     SceneParams *dummy_params = make_scene_params();
     SearchResult critical_point;
     IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
+
+    Path path = get_path(rng, origin, direction, params);
 
     for (int p = 0; p < number_of_scene_params; p++) {
         vec3 radiance;
@@ -708,9 +833,7 @@ void render_pixel(
         __enzyme_fwddiff_radiance(
             (void*)render_get_radiance_wrapper,
             enzyme_dup, radiance, d_radiance,
-            enzyme_const, &intersection,
-            enzyme_const, origin,
-            enzyme_const, direction,
+            enzyme_const, &path,
             enzyme_dup, raw_params, raw_dummy_params
         );
 
@@ -719,7 +842,7 @@ void render_pixel(
         }
     }
 
-    get_radiance_at(real, &intersection, origin, direction, params);
+    accumulate_radiance_along_path(real, &path, params);
 
     if(critical_point.found_critical_point) {
         vec3 y_star;
@@ -736,10 +859,10 @@ void render_pixel(
         vec3_scale(deltaL, deltaL, 1 / distance_threshold);
         outer_product_add_assign(params_per_channel, dummy_params, deltaL);
     }
+
+    free_path(&path);
     free_scene_params(dummy_params);
 }
-
-
 
 long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
@@ -851,7 +974,7 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
     }
 }
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params) {
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params, RandomState *rng) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
@@ -878,9 +1001,6 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     }
 
     for (long ir = 0; ir < real->image_height; ir++) {
-        // if (ir % 50 == 0) {
-        //     printf("on row %ld\n", ir);
-        // }
         for (long ic = 0; ic < real->image_width; ic++) {
             float r = (float)ir;
             float c = (float)ic;
@@ -900,7 +1020,7 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
 
             // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            render_pixel(out_real, camera_position, direction, &ppc, params);
+            render_pixel(out_real, camera_position, direction, &ppc, params, rng);
 
             image_set(real, ir, ic, out_real);
             gradient_image_set(&ppc, gradient, ir, ic);

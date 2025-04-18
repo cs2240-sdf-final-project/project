@@ -82,6 +82,7 @@ int main(void) {
     FILE *fgroundtruth = fopen("groundtruth.ppm", "r");
     assert(fgroundtruth);
 
+    RandomState rng = make_random();
     long image_width = 500;
     long image_height = 500;
     Image real = make_image(image_width, image_height);
@@ -94,7 +95,7 @@ int main(void) {
 
     const int num_epochs = 20;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
-        render_image(&real, &gradient, params); // calculate radiance and gradients
+        render_image(&real, &gradient, params, &rng); // calculate radiance and gradients
 
         // Compute loss and derivative of loss
         float loss = mse_loss(&real, &groundtruth);

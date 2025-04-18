@@ -16,14 +16,17 @@ run-descent: build/descent.exe
 	build/descent.exe
 	convert -delay 10 -loop 1 $(shell echo descent-sequence/real_*.ppm) real.gif
 
-build/debug.exe: src/debug.cpp build/hello.o
+build/debug.exe: src/debug.cpp build/hello.o src/sim_random.o
 	clang++-16 $^ $(FLAGS) -o $@
 
-build/descent.exe: src/descent.cpp build/hello.o
+build/descent.exe: src/descent.cpp build/hello.o src/sim_random.o
 	clang-16 $^ $(FLAGS) -lm -o $@
 
-build/hello.o: build/output.ll
-	clang-16 -c $^ $(FLAGS) -o $@
+build/hello.o: build/output.ll src/sim_random.o
+	clang-16 -c $< $(FLAGS) -o $@
+
+build/sim_random.o: src/sim_random.c
+	clang-16 -c $< $(FLAGS) -o $@
 
 build/input.ll: src/hello.cpp
 	clang-16 $^ -S -emit-llvm -o $@ $(FLAGS)

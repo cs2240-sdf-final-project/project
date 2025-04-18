@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "hello.h"
+#include "sim_random.h"
 
 int main(void) {
     mkdir("debug-gradient", 0777); // do nothing if debug-gradient already exists
@@ -20,7 +21,9 @@ int main(void) {
 
     SceneParams *params = make_scene_params();
 
-    render_image(&real, &gradient, params);
+    RandomState rng = make_random();
+
+    render_image(&real, &gradient, params, &rng);
 
     FILE *freal = fopen("real.ppm", "w");
     assert(freal);
