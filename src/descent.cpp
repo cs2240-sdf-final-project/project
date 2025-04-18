@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 
 #include "hello.h"
+#include "sim_random.h"
 
 float gradient_scaling_factor(long image_width, long image_height) {
     long size = image_width * image_height * 3;
@@ -82,7 +83,9 @@ int main(void) {
     FILE *fgroundtruth = fopen("groundtruth.ppm", "r");
     assert(fgroundtruth);
 
-    RandomState rng = make_random();
+    RandomState rng;
+    make_random(&rng);
+
     long image_width = 500;
     long image_height = 500;
     Image real = make_image(image_width, image_height);

@@ -81,6 +81,12 @@ void vec3_componentwise_mul(vec3 out, const vec3 a, const vec3 b) {
     }
 }
 
+void vec3_componentwise_mul_add(vec3 out, const vec3 a, const vec3 b, const vec3 c) {
+    for (int i = 0; i < 3; i++) {
+        out[i] = a[i] * b[i] + c[i];
+    }
+}
+
 void vec3_set(vec3 out, float value) {
     vec3 to_set = { value, value, value };
     vec3_dup(out, to_set);
@@ -281,7 +287,7 @@ static inline void object_cylinder(const vec3 pos, const SceneParams *params, Sd
     vec3_add(offset, offset, doffset);
     sample->distance = sdfCylinder(offset, 0.3f + params->object_1_r, 0.5f + params->object_1_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    // vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 static inline void object_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
@@ -294,7 +300,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, Sdf
     vec3_add(offset, offset, dpos);
     sample->distance = sdfVerticalCapsule(offset, 0.5f + params->object_2_r, 0.3f + params->object_2_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    // vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 // Back:
@@ -302,7 +308,7 @@ static inline void object_backwall(const vec3 pos, const SceneParams *params, Sd
     (void)params;
     vec3 plane_normal = {0.0, 0.0, 1.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
-    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    // vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
@@ -320,7 +326,7 @@ static inline void object_leftwall(const vec3 pos, const SceneParams *params, Sd
     (void)params;
     vec3 plane_normal = {1.0, 0.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
-    vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
+    // vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->diffuse, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->specular, 0.4f);
 }
@@ -329,7 +335,7 @@ static inline void object_rightwall(const vec3 pos, const SceneParams *params, S
     (void)params;
     vec3 plane_normal = {-1.0, 0.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
-    vec3_set(sample->ambient, 0.14f, 0.45f, 0.091f);
+    // vec3_set(sample->ambient, 0.14f, 0.45f, 0.091f);
     vec3_set(sample->diffuse, 0.14f, 0.45f, 0.091f);
     vec3_set(sample->specular, 0.4f);
 }
@@ -338,7 +344,7 @@ static inline void object_bottomwall(const vec3 pos, const SceneParams *params, 
     (void)params;
     vec3 plane_normal = {0.0, -1.0, 0.0};
     sample->distance = sdfPlane(pos, plane_normal, 1.0f);
-    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    // vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
@@ -586,7 +592,7 @@ typedef struct {
 } Path;
 
 Path make_path(long segment_count, const vec3 initial_pos, const vec3 initial_dir) {
-    Path ret = {0};
+    Path ret;
     ret.pos = (float (*)[3])calloc((size_t)segment_count, 3 * sizeof(float));
     ret.dir = (float (*)[3])calloc((size_t)segment_count, 3 * sizeof(float));
     ret.filter = (float (*)[3])calloc((size_t)segment_count, 3 * sizeof(float));
@@ -604,6 +610,7 @@ long path_segment_count(const Path *path) {
 }
 
 void path_truncate(Path *path, long new_segment_count) {
+    assert(new_segment_count <= path->segment_count);
     path->segment_count = new_segment_count;
 }
 
@@ -619,6 +626,7 @@ void path_get_init(const Path *path, vec3 pos, vec3 dir) {
 }
 
 void path_get(const Path *path, vec3 pos, vec3 dir, vec3 filter, long path_index) {
+    assert(path_index < path->segment_count);
     vec3_dup(pos, path->pos[path_index]);
     vec3_dup(dir, path->dir[path_index]);
     vec3_dup(filter, path->filter[path_index]);
@@ -664,6 +672,7 @@ Path get_path(
     vec3_dup(pos, init_pos);
     vec3 dir;
     vec3_dup(dir, init_dir);
+
     for (long i = 0; i < segment_count; i++) {
         IntersectionResult res = trace_ray_get_intersection(pos, dir, params);
         if (!res.found_intersection) {
@@ -673,13 +682,20 @@ Path get_path(
         ray_step(pos, pos, dir, res.intersection_t);
         vec3 normal;
         get_normal_from(normal, pos, params);
-        vec3_reflect(dir, dir, normal);
+
+        sample_hemisphere(dir, normal, rng);
         vec3_norm(dir, dir);
-        float hemisphere_pdf = 2.f * M_PI;// this is wrong now since it just reflects
-        float continue_prob = 1.f / path_continuation_prob;
-        path_set(&path, pos, dir, hemisphere_pdf * continue_prob, i);
+        ray_step(pos, pos, dir, 1e-4f);
+
+        float inv_hemisphere_pdf = 2.f * (float)M_PI;
+        path_set(&path, pos, dir, inv_hemisphere_pdf, i);
     }
     return path;
+}
+
+inline static void inv_diffuse_brdf(vec3 out, const vec3 diffuse_coeff) {
+    vec3_dup(out, diffuse_coeff);
+    vec3_scale(out, out, 1.0f / (float)M_PI);
 }
 
 void accumulate_radiance_along_path(
@@ -695,22 +711,37 @@ void accumulate_radiance_along_path(
     vec3 dir;
     path_get_init(path, pos, dir);
 
+    bool count_emitted = true;
+    int i = 0;
     long num_iters = path_segment_count(path);
-    for (int i = 0; i < num_iters; i++) {
+    for (;;) {
         SdfResult sample;
         scene_sample(pos, params, &sample);
         vec3 normal;
         get_normal_from(normal, pos, params);
 
-        vec3 radiance_add;
-        phongLight(radiance_add, dir, normal, &sample);
-        vec3_componentwise_mul(radiance_add, radiance_add, accumulated_filter);
-        vec3_add(accumulated_radiance, accumulated_radiance, radiance_add);
+        if (count_emitted) {
+            vec3_componentwise_mul_add(accumulated_radiance, accumulated_filter, sample.ambient, accumulated_radiance);
+        }
 
-        vec3 filter_mul;
-        path_get(path, pos, dir, filter_mul, i);
+        if (i >= num_iters) {
+            break;
+        }
 
-        vec3_componentwise_mul(accumulated_filter, accumulated_filter, filter_mul);
+        vec3_scale(accumulated_filter, accumulated_filter, 1.f / path_continuation_prob);
+
+        // direct lighting would go here
+
+        vec3 next_ray_direction_pdf;
+        path_get(path, pos, dir, next_ray_direction_pdf, i);
+
+        vec3_componentwise_mul(accumulated_filter, accumulated_filter, next_ray_direction_pdf);
+        vec3_scale(accumulated_filter, accumulated_filter, vec3_mul_inner(normal, dir)); // visibility factor
+        vec3 brdf;
+        inv_diffuse_brdf(brdf, sample.diffuse);
+        vec3_componentwise_mul(accumulated_filter, accumulated_filter, brdf);
+
+        i += 1;
     }
 }
 
@@ -815,50 +846,61 @@ void render_pixel(
 ) {
     SceneParams *dummy_params = make_scene_params();
     SearchResult critical_point;
-    IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
 
     Path path = get_path(rng, origin, direction, params);
 
-    for (int p = 0; p < number_of_scene_params; p++) {
+    // printf("got path %ld\n", path.segment_count);
+    // fflush(stdout);
+    // for (int p = 0; p < number_of_scene_params; p++) {
+    //     vec3 radiance;
+    //     vec3_set(radiance, 1.f);
+    //     vec3 d_radiance;
+    //     vec3_set(d_radiance, 1.f);
+
+    //     const float *raw_params = float_pointer_from_params(params);
+    //     scene_params_fill(dummy_params, 0.f);
+    //     scene_params_set(dummy_params, p, 1.f);
+    //     const float *raw_dummy_params = float_pointer_from_params(dummy_params);
+
+    //     __enzyme_fwddiff_radiance(
+    //         (void*)render_get_radiance_wrapper,
+    //         enzyme_dup, radiance, d_radiance,
+    //         enzyme_const, &path,
+    //         enzyme_dup, raw_params, raw_dummy_params
+    //     );
+
+    //     for (int ch = 0; ch < 3; ch++) {
+    //         scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
+    //     }
+    // }
+
+    int count = 10;
+    for (int i = 0; i < count; i++) {
         vec3 radiance;
-        vec3_set(radiance, 1.f);
-        vec3 d_radiance;
-        vec3_set(d_radiance, 1.f);
-
-        const float *raw_params = float_pointer_from_params(params);
-        scene_params_fill(dummy_params, 0.f);
-        scene_params_set(dummy_params, p, 1.f);
-        const float *raw_dummy_params = float_pointer_from_params(dummy_params);
-
-        __enzyme_fwddiff_radiance(
-            (void*)render_get_radiance_wrapper,
-            enzyme_dup, radiance, d_radiance,
-            enzyme_const, &path,
-            enzyme_dup, raw_params, raw_dummy_params
-        );
-
-        for (int ch = 0; ch < 3; ch++) {
-            scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
-        }
+        Path path = get_path(rng, origin, direction, params);
+        accumulate_radiance_along_path(radiance, &path, params);
+        vec3_add(real, real, radiance);
     }
+    vec3_scale(real, real, 1.0f / (float)count);
 
-    accumulate_radiance_along_path(real, &path, params);
 
+    // assert(0 && "bye");
     if(critical_point.found_critical_point) {
-        vec3 y_star;
-        ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
-        SdfResult sample;
-        scene_sample(y_star, params, &sample);
-        vec3 normal;
-        get_normal_from(normal, y_star, params);
-        vec3 y_star_radiance;
-        phongLight(y_star_radiance, direction, normal, &sample);
-        diff_sdf(y_star, dummy_params, params);
-        vec3 deltaL;
-        vec3_sub(deltaL, y_star_radiance, real);
-        vec3_scale(deltaL, deltaL, 1 / distance_threshold);
-        outer_product_add_assign(params_per_channel, dummy_params, deltaL);
+        // vec3 y_star;
+        // ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
+        // SdfResult sample;
+        // scene_sample(y_star, params, &sample);
+        // vec3 normal;
+        // get_normal_from(normal, y_star, params);
+        // vec3 y_star_radiance;
+        // phongLight(y_star_radiance, direction, normal, &sample);
+        // diff_sdf(y_star, dummy_params, params);
+        // vec3 deltaL;
+        // vec3_sub(deltaL, y_star_radiance, real);
+        // vec3_scale(deltaL, deltaL, 1 / distance_threshold);
+        // outer_product_add_assign(params_per_channel, dummy_params, deltaL);
     }
+    // assert(0 && "hello");
 
     free_path(&path);
     free_scene_params(dummy_params);
@@ -957,7 +999,7 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     assert(ic < image->image_width);
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
-        char value = (char)clamp(radiance[p] * 255.f, 0.f, 255.f);
+        char value = (char)clamp(radiance[p] * 5.f * 255.f, 0.f, 255.f);
         image->buf[index] = value;
     }
 }

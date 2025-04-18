@@ -20,16 +20,16 @@ build/debug.exe: src/debug.cpp build/hello.o build/sim_random.o
 	clang++-16 $^ $(FLAGS) -o $@
 
 build/descent.exe: src/descent.cpp build/hello.o build/sim_random.o
-	clang-16 $^ $(FLAGS) -lm -o $@
+	clang++-16 $^ $(FLAGS) -lm -o $@
 
 build/hello.o: build/output.ll build/sim_random.o
+	clang++-16 -c $< $(FLAGS) -o $@
+
+build/sim_random.o: src/sim_random.c src/sim_random.h
 	clang-16 -c $< $(FLAGS) -o $@
 
-build/sim_random.o: build/sim_random.c
-	clang-16 -c $< $(FLAGS) -o $@
-
-build/input.ll: src/hello.cpp
-	clang-16 $^ -S -emit-llvm -o $@ $(FLAGS)
+build/input.ll: src/hello.cpp src/hello.h
+	clang++-16 $< -S -emit-llvm -o $@ $(FLAGS)
 
 build/output.ll: build/input.ll
 	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) -passes=enzyme -o $@ -S

@@ -21,7 +21,8 @@ int main(void) {
 
     SceneParams *params = make_scene_params();
 
-    RandomState rng = make_random();
+    RandomState rng;
+    make_random(&rng);
 
     render_image(&real, &gradient, params, &rng);
 
