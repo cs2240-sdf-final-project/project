@@ -138,16 +138,16 @@ float sdfSphere(const vec3 pos) {
 }
 
 struct SceneParams {
-    float object_1_x;
-    float object_1_y;
-    float object_1_z;
-    float object_1_r;
-    float object_1_h;
-    float object_2_x;
-    float object_2_y;
-    float object_2_z;
-    float object_2_r;
-    float object_2_h;
+    float object_1_x; // 0
+    float object_1_y; // 1
+    float object_1_z; // 2
+    float object_1_r; // 3
+    float object_1_h; // 4
+    float object_2_x; // 5
+    float object_2_y; // 6
+    float object_2_z; // 7
+    float object_2_r; // 8
+    float object_2_h; // 9
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -262,7 +262,7 @@ static inline void object_cylinder(const vec3 pos, const SceneParams *params, Sd
     vec3 offset = {-0.4f, -0.2f, 0.2f};
     vec3_add(offset, offset, pos);
     vec3_add(offset, offset, doffset);
-    sample->distance = sdfCylinder(offset, 0.3f + params->object_1_r, 0.5f + params->object_1_h);
+    sample->distance = sdfCylinder(offset, 0.3f + params->object_1_r, 0.8f + params->object_1_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -275,7 +275,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, Sdf
     vec3 offset = {0.4f, -0.3f, -0.5f};
     vec3_add(offset, offset, pos);
     vec3_add(offset, offset, dpos);
-    sample->distance = sdfVerticalCapsule(offset, 0.5f + params->object_2_r, 0.3f + params->object_2_h);
+    sample->distance = sdfVerticalCapsule(offset, 0.5f + params->object_2_h, 0.3f + params->object_2_r);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -489,7 +489,7 @@ void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsI
     );
 }
 
-void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
+inline static void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
     float lightColors[3][3] = {
         {.8f, .8f, .8f},
         {.2f, .2f, .2f},
@@ -510,9 +510,7 @@ void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfR
         vec3_norm(light_dir, lightDirections[l]);
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
         vec3 bounce;
-        for (int i = 0; i < 3; i++) {
-            bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
-        }
+        vec3_reflect(bounce, light_dir, normal);
         float specular = powf(vec3_mul_inner(bounce, looking), sample->shininess);
         for (int i = 0; i < 3; i++) {
             radiance[i] += kd * facing * sample->diffuse[i] * lightColor[i];
@@ -567,7 +565,7 @@ IntersectionResult trace_ray_get_critical_point(
     return ret;
 }
 
-void get_radiance_at(
+inline static void get_radiance_at(
     vec3 radiance,
     const IntersectionResult *intersection,
     const vec3 origin,
@@ -692,7 +690,6 @@ void render_pixel(
     SceneParamsPerChannel *params_per_channel,
     const SceneParams *params
 ) {
-    SceneParams *dummy_params = make_scene_params();
     SearchResult critical_point;
     IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
 
@@ -707,7 +704,7 @@ void render_pixel(
             enzyme_const, &intersection,
             enzyme_const, origin,
             enzyme_const, direction,
-            enzyme_dup, raw_params, raw_fill,
+            enzyme_dupnoneed, raw_params, raw_fill,
             enzyme_const, ch
         );
     }
@@ -715,6 +712,8 @@ void render_pixel(
     get_radiance_at(real, &intersection, origin, direction, params);
 
     if(critical_point.found_critical_point) {
+        SceneParams *dummy_params = make_scene_params();
+        scene_params_fill(dummy_params, 0.f);
         vec3 y_star;
         ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
         SdfResult sample;
@@ -726,10 +725,10 @@ void render_pixel(
         diff_sdf(y_star, dummy_params, params);
         vec3 deltaL;
         vec3_sub(deltaL, y_star_radiance, real);
-        vec3_scale(deltaL, deltaL, 1 / distance_threshold);
+        vec3_scale(deltaL, deltaL, -1.f / distance_threshold);
         outer_product_add_assign(params_per_channel, dummy_params, deltaL);
+        free_scene_params(dummy_params);
     }
-    free_scene_params(dummy_params);
 }
 
 
