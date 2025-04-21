@@ -34,6 +34,7 @@ int main(void) {
         image_write_ppm(&grad_slice, fgradient);
     }
 
+    free_image(&grad_slice);
     free_image(&real);
     free_gradient_image(&gradient);
     free_scene_params(params);

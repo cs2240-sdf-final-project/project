@@ -275,7 +275,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, Sdf
     vec3 offset = {0.4f, -0.3f, -0.5f};
     vec3_add(offset, offset, pos);
     vec3_add(offset, offset, dpos);
-    sample->distance = sdfVerticalCapsule(offset, 0.5f, 0.3f);
+    sample->distance = sdfVerticalCapsule(offset, 0.5f + params->object_2_r, 0.3f + params->object_2_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -663,24 +663,26 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
     }
 }
 
-void render_get_radiance_wrapper(
-    vec3 radiance,
+float render_get_radiance_wrapper(
     const IntersectionResult *intersection,
     const vec3 origin,
     const vec3 direction,
-    const float *raw_params
+    const float *raw_params,
+    int ch
 ) {
+    vec3 radiance;
     const SceneParams *params = params_from_float_pointer(raw_params);
     get_radiance_at(radiance, intersection, origin, direction, params);
+    return radiance[ch];
 }
 
-extern void __enzyme_fwddiff_radiance(
+extern void __enzyme_autodiff_radiance(
     void *,
-    int, float *, float *,
     int, const IntersectionResult *,
     int, const float *,
     int, const float *,
-    int, const float *, const float *
+    int, const float *, float *,
+    int, int
 );
 
 void render_pixel(
@@ -694,29 +696,20 @@ void render_pixel(
     SearchResult critical_point;
     IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
 
-    for (int p = 0; p < number_of_scene_params; p++) {
-        vec3 radiance;
-        vec3_set(radiance, 1.f);
-        vec3 d_radiance;
-        vec3_set(d_radiance, 1.f);
+    const float *raw_params = float_pointer_from_params(params);
+    for (int ch = 0; ch < 3; ch++) {
+        SceneParams *fill = params_per_channel->rgb[ch];
+        scene_params_fill(fill, 0.f);
+        float *raw_fill = float_pointer_from_params(fill);
 
-        const float *raw_params = float_pointer_from_params(params);
-        scene_params_fill(dummy_params, 0.f);
-        scene_params_set(dummy_params, p, 1.f);
-        const float *raw_dummy_params = float_pointer_from_params(dummy_params);
-
-        __enzyme_fwddiff_radiance(
+        __enzyme_autodiff_radiance(
             (void*)render_get_radiance_wrapper,
-            enzyme_dup, radiance, d_radiance,
             enzyme_const, &intersection,
             enzyme_const, origin,
             enzyme_const, direction,
-            enzyme_dup, raw_params, raw_dummy_params
+            enzyme_dup, raw_params, raw_fill,
+            enzyme_const, ch
         );
-
-        for (int ch = 0; ch < 3; ch++) {
-            scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
-        }
     }
 
     get_radiance_at(real, &intersection, origin, direction, params);
