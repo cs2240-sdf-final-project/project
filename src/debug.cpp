@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "hello.h"
+#include "sim_random.h"
 
 int main(void) {
     mkdir("debug-gradient", 0777); // do nothing if debug-gradient already exists
@@ -18,8 +19,11 @@ int main(void) {
     GradientImage gradient = make_gradient_image(image_width, image_height);
 
     SceneParams *params = make_scene_params();
+    RandomState random;
+    make_random(&random);
+    
 
-    render_image(&real, &gradient, params);
+    render_image(&real, &gradient, params,&random );
 
     FILE *freal = fopen("real.ppm", "w");
     image_write_ppm(&real, freal);

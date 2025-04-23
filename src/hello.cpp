@@ -9,6 +9,10 @@
 #include <sys/types.h>
 
 #include "hello.h"
+#include "sim_random.h"
+#include <iostream>
+#include <vector>
+#include <random>
 
 int enzyme_dup;
 int enzyme_dupnoneed;
@@ -17,6 +21,26 @@ int enzyme_const;
 
 // width of the scene band
 const float distance_threshold = 5e-2f;
+
+// we take steps at most this size in order to avoid missing
+// sign changes in the directional derivatives
+const float max_step_size = 1.0f;
+// take this many steps to balance performance with exploring the entire scene
+const int number_of_steps = 1'000;
+// if our sdf gets smaller than this amount, we will consider it an intersection with the surface
+const float contact_threshold = 1e-4f;
+
+const int depth = 3;
+
+const float lm_pi = 3.14159265358979323846f;
+
+const float pathContinuationProb = 0.9f;
+
+typedef struct{
+    vec3 pos;
+    vec3 dir;
+
+}Segment;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -78,6 +102,12 @@ void vec2_abs(vec2 out, const vec2 in) {
     for (int i = 0; i < 2; i++) {
         out[i] = fabsf(in[i]);
     }
+}
+
+void vec3_cwiseProduct(vec3 out, vec3 a, vec3 b){
+    out[0] = a[0]*b[0];
+    out[1] = a[1]*b[1];
+    out[2] = a[2]*b[2];
 }
 
 float sdfCylinder(const vec3 pos,float radius, float height) {
@@ -148,6 +178,11 @@ struct SceneParams {
     float object_2_z;
     float object_2_r;
     float object_2_h;
+
+    //light color
+    float object_1_color[3];
+    float object_1_direction[3];
+    float object_color1;
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -231,6 +266,8 @@ typedef struct {
     float ambient[3];
     float diffuse[3];
     float specular[3];
+    float emissive[3];
+    bool isReflected;
     float shininess;
 } SdfResult;
 
@@ -239,6 +276,8 @@ static inline void default_scene_sample(SdfResult *s) {
     vec3_set(s->ambient, 0.0);
     vec3_set(s->diffuse, 0.0);
     vec3_set(s->specular, 0.0);
+    vec3_set(s->emissive, 0.0);
+    s->isReflected = false;
     s->shininess = 1.0;
 }
 
@@ -251,6 +290,7 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
     vec3_dup(destination->ambient, b->ambient);
     vec3_dup(destination->diffuse, b->diffuse);
     vec3_dup(destination->specular, b->specular);
+    vec3_dup(destination->emissive, b->emissive);
     destination->shininess = b->shininess;
 }
 
@@ -278,6 +318,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, Sdf
     sample->distance = sdfVerticalCapsule(offset, 0.5f, 0.3f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    vec3_set(sample->emissive, 10.f, 10.f, 10.f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 // Back:
@@ -489,12 +530,13 @@ void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsI
     );
 }
 
-void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
+void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample, const SceneParams *params) {
     float lightColors[3][3] = {
         {.8f, .8f, .8f},
         {.2f, .2f, .2f},
         {.2f, .2f, .2f},
     };
+
     float lightDirections[3][3] = {
         {0.f, -1.f, 0.f},
         {-3.f, 2.f, 0.f},
@@ -504,11 +546,19 @@ void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfR
     float ks = 1.0;
     vec3_dup(radiance, sample->ambient);
     for (int l = 0; l < 3; l++) {
-        vec3 lightColor;
+        vec3 lightColor; 
         vec3_dup(lightColor, lightColors[l]);
+        lightColor[0] += params->object_1_color[0];
+        lightColor[1] += params->object_1_color[1]; 
+        lightColor[2] += params->object_1_color[2]; 
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
+        light_dir[0] += params->object_1_direction[0];
+        light_dir[1] += params->object_1_direction[1];
+        light_dir[2] += params->object_1_direction[2];
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
+
+        
         vec3 bounce;
         for (int i = 0; i < 3; i++) {
             bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
@@ -526,19 +576,40 @@ typedef struct {
     float intersection_t;
 } IntersectionResult;
 
+IntersectionResult trace_ray(
+
+    const vec3 origin,
+    const vec3 direction,
+    const SceneParams *params
+
+){
+    float t = 0.0;
+
+    IntersectionResult ret = { false, 0.0 };
+    for (int i = 0; i < number_of_steps; i++) {
+
+        vec3 pos;
+        ray_step(pos, origin, direction, t);
+        float distance = scene_sample_sdf(pos, params);
+        if (distance < contact_threshold) {
+            ret.found_intersection = true;
+            ret.intersection_t = t;
+            break;
+        }
+        float step_size = fminf(max_step_size, distance);
+        t += step_size;
+    }
+    return ret;
+
+}
+
 IntersectionResult trace_ray_get_critical_point(
     SearchResult *critical_point,
     const vec3 origin,
     const vec3 direction,
     const SceneParams *params
 ) {
-    // we take steps at most this size in order to avoid missing
-    // sign changes in the directional derivatives
-    const float max_step_size = 1.0f;
-    // take this many steps to balance performance with exploring the entire scene
-    const int number_of_steps = 1'000;
-    // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
-    const float contact_threshold = 1e-4f;
+
 
     float t = 0.0;
     float previous_t = 0.0;
@@ -567,24 +638,326 @@ IntersectionResult trace_ray_get_critical_point(
     return ret;
 }
 
-void get_radiance_at(
-    vec3 radiance,
-    const IntersectionResult *intersection,
-    const vec3 origin,
-    const vec3 direction,
-    const SceneParams *params
-) {
-    if (!intersection->found_intersection) {
-        vec3_set(radiance, 0.f);
+void uniformSampleHemisphere(vec3 direction, vec3 normal){
+
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+
+    float r1 = dis(gen);
+    float r2 = dis(gen);
+
+    float phi = 2.0f * lm_pi * r1;
+    float cosTheta = 1.0f - r2;
+    float sinTheta = std::sqrt(1.0f - cosTheta * cosTheta);
+
+    float x = sinTheta * std::cos(phi);
+    float y = sinTheta * std::sin(phi);
+    float z = cosTheta;
+
+    vec3 wi;
+    vec3_dup(wi,vec3{x,y,z});
+
+    vec3 v1;
+    vec3_dup(v1,vec3{0.0f, 0.0f, 1.0f});
+    vec3 v2;
+    vec3_dup(v2,normal);
+    vec3 v;
+    vec3_dup(v,wi);
+    vec3 n_normal;
+    vec3_norm(n_normal, v2);
+
+    vec3 k;
+    vec3_mul_cross(k,v1,n_normal);
+
+    float dot_product = vec3_mul_inner(v1,n_normal);
+
+    vec3 wi_rotated;
+    vec3_set(wi_rotated, 0.0f);
+
+    float epsilon = 1e-6f;
+
+    if(dot_product > 1.0f - epsilon){
+
+        vec3_dup(direction, wi); 
+        return;
+
+    }else if(dot_product < -1.0f + epsilon){
+
+        vec3_dup(wi_rotated , vec3{wi[0], -wi[1], -wi[2]});
+        vec3_dup(direction, wi_rotated);
+
         return;
     }
+
+    vec3 k_norm;
+    vec3_norm(k_norm,k);
+
+    float costheta = vec3_mul_inner(v1,n_normal);
+
+    costheta = fmaxf(-1.0f, fminf(1.0f, costheta));
+  
+    float sintheta = vec3_len(k);
+
+    
+    vec3 first_term;
+    vec3_scale(first_term, wi, costheta);
+    vec3 second_term;
+    vec3_mul_cross(second_term,k_norm,wi);
+    vec3_scale(second_term, second_term,sintheta);
+
+    vec3 last_term;
+    float dotk_w = vec3_mul_inner(k_norm,wi);
+    dotk_w *= (1 - costheta);
+    vec3_scale(last_term, k_norm,dotk_w);
+
+    vec3_add(wi_rotated, wi_rotated,first_term);
+    vec3_add(wi_rotated, wi_rotated,second_term);
+    vec3_add(wi_rotated, wi_rotated,last_term);
+
+
+
+
+
+    vec3_dup(direction,wi_rotated);
+
+
+
+
+
+}
+void test_hemisphere_sampling() {
+    printf("Testing uniformSampleHemisphere orientation...\n");
+    // Adjust num_samples as needed
+    int num_samples = 10000; // How many random directions to test per case
+    int error_count = 0;
+    // Use a small negative tolerance for checks like >= 0
+    // to account for minor floating point inaccuracies near zero
+    float tolerance = -1e-6f;
+
+    // --- Test Case 1: Normal = (0, 0, 1) ---
+    printf(" Test 1: Normal = (0, 0, 1). Expecting dir[2] >= 0\n");
+    vec3 test_normal_z_pos;
+    vec3_dup(test_normal_z_pos, vec3{0.f, 0.f, 1.f}); // Use the test normal
+    for (int i = 0; i < num_samples; ++i) {
+        vec3 test_dir;
+        // --- Call your function correctly ---
+        // If it needs PDF: float pdf; uniformSampleHemisphere(test_dir, pdf, test_normal_z_pos);
+        uniformSampleHemisphere(test_dir, test_normal_z_pos); // Pass the correct normal
+        // --- Check the result ---
+        if (test_dir[2] < tolerance) { // Check z component >= 0 (allowing for tolerance)
+            printf("  ERROR (Sample %d): Normal=(0,0,1), Dir=(%f, %f, %f) -> dir[2] < 0!\n",
+                   i, test_dir[0], test_dir[1], test_dir[2]);
+            error_count++;
+             // break; // Optional: Stop this test case on first error
+        }
+    }
+
+    // --- Test Case 2: Normal = (0, 1, 0) ---
+    printf(" Test 2: Normal = (0, 1, 0). Expecting dir[1] >= 0\n");
+    vec3 test_normal_y_pos;
+    vec3_dup(test_normal_y_pos, vec3{0.f, 1.f, 0.f}); // Use the test normal
+    for (int i = 0; i < num_samples; ++i) {
+        vec3 test_dir;
+        uniformSampleHemisphere(test_dir, test_normal_y_pos); // Pass the correct normal
+        if (test_dir[1] < tolerance) { // Check y component >= 0
+            printf("  ERROR (Sample %d): Normal=(0,1,0), Dir=(%f, %f, %f) -> dir[1] < 0!\n",
+                   i, test_dir[0], test_dir[1], test_dir[2]);
+            error_count++;
+            // break;
+        }
+    }
+
+    // --- Test Case 3: Normal = (1, 0, 0) ---
+    printf(" Test 3: Normal = (1, 0, 0). Expecting dir[0] >= 0\n");
+    vec3 test_normal_x_pos;
+    vec3_dup(test_normal_x_pos, vec3{1.f, 0.f, 0.f}); // Use the test normal
+    for (int i = 0; i < num_samples; ++i) {
+        vec3 test_dir;
+        uniformSampleHemisphere(test_dir, test_normal_x_pos); // Pass the correct normal
+        if (test_dir[0] < tolerance) { // Check x component >= 0
+            printf("  ERROR (Sample %d): Normal=(1,0,0), Dir=(%f, %f, %f) -> dir[0] < 0!\n",
+                   i, test_dir[0], test_dir[1], test_dir[2]);
+            error_count++;
+            // break;
+        }
+    }
+
+    // --- Test Case 4: Normal = (0, 0, -1) ---
+    printf(" Test 4: Normal = (0, 0, -1). Expecting dir[2] <= 0\n");
+    vec3 test_normal_z_neg;
+    vec3_dup(test_normal_z_neg, vec3{0.f, 0.f, -1.f}); // Use the test normal
+    for (int i = 0; i < num_samples; ++i) {
+        vec3 test_dir;
+        uniformSampleHemisphere(test_dir, test_normal_z_neg); // Pass the correct normal
+        // Check z component <= 0 (allowing for tolerance)
+        // test_dir[2] > -tolerance is equivalent to test_dir[2] > tolerance_positive
+        if (test_dir[2] > -tolerance) {
+            printf("  ERROR (Sample %d): Normal=(0,0,-1), Dir=(%f, %f, %f) -> dir[2] > 0!\n",
+                   i, test_dir[0], test_dir[1], test_dir[2]);
+            error_count++;
+            // break;
+        }
+    }
+
+    // --- Summary ---
+    printf("----------------------------------------\n");
+    if (error_count == 0) {
+        printf("Hemisphere sampling orientation test PASSED for %d samples per case.\n", num_samples);
+    } else {
+        printf("Hemisphere sampling orientation test FAILED with %d error(s).\n", error_count);
+    }
+    printf("----------------------------------------\n");
+}
+
+std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *random,const SceneParams *params){
+
+    std::vector<Segment> path;
+
     vec3 current_position;
-    ray_step(current_position, origin, direction, intersection->intersection_t);
-    SdfResult sample;
-    scene_sample(current_position, params, &sample);
-    vec3 normal;
-    get_normal_from(normal, current_position, params);
-    phongLight(radiance, direction, normal, &sample);
+    vec3_dup(current_position, origin);
+    vec3 current_direction;
+    vec3_dup(current_direction,direction);
+    IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
+    
+    //store current ray 
+    Segment newSegment;
+    vec3_dup(newSegment.pos,current_position);
+    vec3_dup(newSegment.dir,current_direction);
+    path.push_back(newSegment);
+    
+
+    while(true){
+
+        
+
+        IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
+        if(!hitPoint.found_intersection){
+            return path;
+        }
+        //store current ray 
+        Segment newSegment;
+        vec3_dup(newSegment.pos,current_position);
+        vec3_dup(newSegment.dir,current_direction);
+        path.push_back(newSegment);
+
+        if(random_next_float(random)> pathContinuationProb){
+            break;
+        }
+
+        //find intersection point
+
+        vec3 hit_intersection_point;
+        ray_step(hit_intersection_point, current_position, current_direction, hitPoint.intersection_t);
+
+        vec3 normal;
+        get_normal_from(normal, hit_intersection_point, params);
+
+        vec3 newDir;
+        //sample_hemisphere(newDir, normal, random);
+        uniformSampleHemisphere(newDir, normal);
+
+
+        //update new ray 
+        vec3_dup(current_position,hit_intersection_point);
+        vec3_dup(current_direction,newDir);
+
+
+    }
+
+    return path;
+
+
+    
+}
+
+
+void get_radiance_at(
+    vec3 radiance,
+    std::vector<Segment> path,
+    const SceneParams *params,
+    const int depth,
+    RandomState* random
+
+) {
+    vec3 spectralFilter;
+    vec3_set(spectralFilter, 1.f);
+    vec3 intensity;
+    vec3_set(intensity, 0.f);
+    
+    for(size_t i = 0; i < path.size(); i++){
+        if(i != path.size() - 1){
+
+            vec3 hitPosition;
+            vec3_dup(hitPosition, path[i+1].pos);
+            vec3 hitDirection;
+            vec3_dup(hitDirection,path[i].dir);
+
+            SdfResult sample;
+            scene_sample(hitPosition, params, &sample);
+            vec3 normal;
+            get_normal_from(normal, hitPosition, params);
+
+            // vec3 normal_color;
+            // vec3_scale(normal_color, normal, 0.5f);
+            // vec3_add(normal_color, normal_color, vec3{0.5f, 0.5f, 0.5f});
+            // vec3_dup(radiance, normal_color);
+            
+                        
+
+            vec3 emissive;
+            vec3_dup(emissive, sample.emissive);
+            // if (emissive[0] != 0.0f || emissive[1] != 0.0f || emissive[2] != 0.0f)
+            // {
+              
+            //     printf("  i=%zu: Hit Emissive Surface!\n", i); // Indicate why we're printing
+            //     printf("    Emissive Raw        : (%f, %f, %f)\n",
+            //            emissive[0], emissive[1], emissive[2]);
+              
+            // }
+
+            vec3 emissive_part;
+            vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+            // printf("  i=%zu: spectralFilter (Pre-Emissive): (%f, %f, %f)\n",
+            //        i, spectralFilter[0], spectralFilter[1], spectralFilter[2]);
+            // printf("  i=%zu: spectralFilter (Pre-Emissive): (%f, %f, %f)\n",
+            //        i, spectralFilter[0], spectralFilter[1], spectralFilter[2]);
+
+            // if (emissive_part[0] != 0.0f || emissive_part[1] != 0.0f || emissive_part[2] != 0.0f){
+
+            //     printf("  i=%zu: emissive_part (Pre-Emissive): (%f, %f, %f)\n",
+            //        i, emissive_part[0], emissive_part[1], emissive_part[2]);
+
+            // }
+            
+            vec3_add(intensity, intensity, emissive_part);
+            //vec3_add(intensity,intensity,vec3{0.1f,0.1f,0.1f});
+
+            vec3_scale(spectralFilter,spectralFilter,1 / pathContinuationProb);
+            // printf("  i=%zu: spectralFilter (Pre-Emissive): (%f, %f, %f)\n",
+            //        i, spectralFilter[0], spectralFilter[1], spectralFilter[2]);
+
+            float pdf = 2.f * lm_pi;
+            vec3_scale(spectralFilter,spectralFilter,pdf);
+
+            //float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, hitDirection));
+            float cosine_term = vec3_mul_inner(normal, hitDirection);
+            //printf("cosine term: %f\n", cosine_term); 
+            vec3_scale(spectralFilter, spectralFilter, cosine_term);
+
+            vec3 brdf;
+            vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
+            vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+
+        }
+        
+    }
+
+    vec3_dup(radiance,intensity);
+    //vec3_dup(intensity,intensity);
+    
+    
+    
 }
 
 
@@ -665,13 +1038,13 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
 
 void render_get_radiance_wrapper(
     vec3 radiance,
-    const IntersectionResult *intersection,
-    const vec3 origin,
-    const vec3 direction,
-    const float *raw_params
+    std::vector<Segment> path,
+    const float *raw_params,
+    RandomState* random
 ) {
     const SceneParams *params = params_from_float_pointer(raw_params);
-    get_radiance_at(radiance, intersection, origin, direction, params);
+
+    get_radiance_at(radiance, path, params,depth,random);
 }
 
 extern void __enzyme_fwddiff_radiance(
@@ -680,7 +1053,8 @@ extern void __enzyme_fwddiff_radiance(
     int, const IntersectionResult *,
     int, const float *,
     int, const float *,
-    int, const float *, const float *
+    int, const float *, const float *,
+    int, RandomState *
 );
 
 void render_pixel(
@@ -688,7 +1062,8 @@ void render_pixel(
     const vec3 origin,
     const vec3 direction,
     SceneParamsPerChannel *params_per_channel,
-    const SceneParams *params
+    const SceneParams *params,
+    RandomState* random
 ) {
     SceneParams *dummy_params = make_scene_params();
     SearchResult critical_point;
@@ -705,37 +1080,44 @@ void render_pixel(
         scene_params_set(dummy_params, p, 1.f);
         const float *raw_dummy_params = float_pointer_from_params(dummy_params);
 
-        __enzyme_fwddiff_radiance(
-            (void*)render_get_radiance_wrapper,
-            enzyme_dup, radiance, d_radiance,
-            enzyme_const, &intersection,
-            enzyme_const, origin,
-            enzyme_const, direction,
-            enzyme_dup, raw_params, raw_dummy_params
-        );
+        // __enzyme_fwddiff_radiance(
+        //     (void*)render_get_radiance_wrapper,
+        //     enzyme_dup, radiance, d_radiance,
+        //     enzyme_const, &intersection,
+        //     enzyme_const, origin,
+        //     enzyme_const, direction,
+        //     enzyme_dup, raw_params, raw_dummy_params,
+        //     enzyme_const, random
+        // );
 
         for (int ch = 0; ch < 3; ch++) {
             scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
         }
     }
+    vec3 o;
+    vec3_dup(o,origin);
+    vec3 d;
+    vec3_dup(d,direction);
 
-    get_radiance_at(real, &intersection, origin, direction, params);
+    std::vector<Segment> path = getSecondaryPath(o , d ,random,params);
 
-    if(critical_point.found_critical_point) {
-        vec3 y_star;
-        ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
-        SdfResult sample;
-        scene_sample(y_star, params, &sample);
-        vec3 normal;
-        get_normal_from(normal, y_star, params);
-        vec3 y_star_radiance;
-        phongLight(y_star_radiance, direction, normal, &sample);
-        diff_sdf(y_star, dummy_params, params);
-        vec3 deltaL;
-        vec3_sub(deltaL, y_star_radiance, real);
-        vec3_scale(deltaL, deltaL, 1 / distance_threshold);
-        outer_product_add_assign(params_per_channel, dummy_params, deltaL);
-    }
+    get_radiance_at(real, path, params,depth,random);
+
+    // if(critical_point.found_critical_point) {
+    //     vec3 y_star;
+    //     ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
+    //     SdfResult sample;
+    //     scene_sample(y_star, params, &sample);
+    //     vec3 normal;
+    //     get_normal_from(normal, y_star, params);
+    //     vec3 y_star_radiance;
+    //     phongLight(y_star_radiance, direction, normal, &sample,params);
+    //     diff_sdf(y_star, dummy_params, params);
+    //     vec3 deltaL;
+    //     vec3_sub(deltaL, y_star_radiance, real);
+    //     vec3_scale(deltaL, deltaL, 1 / distance_threshold);
+    //     outer_product_add_assign(params_per_channel, dummy_params, deltaL);
+    // }
     free_scene_params(dummy_params);
 }
 
@@ -851,7 +1233,7 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
     }
 }
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params) {
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params,RandomState *random) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
@@ -900,7 +1282,7 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
 
             // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            render_pixel(out_real, camera_position, direction, &ppc, params);
+            render_pixel(out_real, camera_position, direction, &ppc, params,random);
 
             image_set(real, ir, ic, out_real);
             gradient_image_set(&ppc, gradient, ir, ic);
@@ -910,4 +1292,6 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     for (int c = 0; c < 3; c++) {
         free_scene_params(ppc.rgb[c]);
     }
+
+    //test_hemisphere_sampling();
 }

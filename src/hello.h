@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include "linmath.h"
+#include "sim_random.h"
 
 extern int number_of_scene_params;
 
@@ -22,6 +23,8 @@ typedef struct {
     long num_bytes;
     char *buf;
 } Image;
+
+
 
 SceneParams *make_scene_params();
 void free_scene_params(SceneParams *params);
@@ -69,7 +72,7 @@ void free_gradient_image(GradientImage *image);
 void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic);
 void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic);
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params);
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params, RandomState *random);
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no);
 
 #endif // HELLO_H

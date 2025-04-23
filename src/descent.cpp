@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 
 #include "hello.h"
+#include "sim_random.h"
 
 float gradient_scaling_factor(long image_width, long image_height) {
     long size = image_width * image_height * 3;
@@ -91,10 +92,13 @@ int main(void) {
 
     SceneParams *params = make_scene_params();
     SceneParams *loss_deriv = make_scene_params();
+    RandomState random;
+    make_random(&random);
 
     const int num_epochs = 20;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
-        render_image(&real, &gradient, params); // calculate radiance and gradients
+        
+        render_image(&real, &gradient, params,&random); // calculate radiance and gradients
 
         // Compute loss and derivative of loss
         float loss = mse_loss(&real, &groundtruth);
