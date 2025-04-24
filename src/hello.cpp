@@ -306,6 +306,8 @@ static inline void object_cylinder(const vec3 pos, const SceneParams *params, Sd
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
+    //vec3_set(sample->emissive, 10.f, 10.f, 10.f);
+    sample->isReflected = true;
 }
 static inline void object_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
     vec3 dpos = {
@@ -318,7 +320,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, Sdf
     sample->distance = sdfVerticalCapsule(offset, 0.5f, 0.3f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->emissive, 10.f, 10.f, 10.f);
+    //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 // Back:
@@ -338,6 +340,8 @@ static inline void object_topwall(const vec3 pos, const SceneParams *params, Sdf
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
+    vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
+   
 }
 // Left:
 static inline void object_leftwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
@@ -649,6 +653,7 @@ void uniformSampleHemisphere(vec3 direction, vec3 normal){
 
     float phi = 2.0f * lm_pi * r1;
     float cosTheta = 1.0f - r2;
+    //float cosTheta = r2;
     float sinTheta = std::sqrt(1.0f - cosTheta * cosTheta);
 
     float x = sinTheta * std::cos(phi);
@@ -818,18 +823,16 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
     vec3_dup(current_position, origin);
     vec3 current_direction;
     vec3_dup(current_direction,direction);
-    IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
+    // IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
     
-    //store current ray 
-    Segment newSegment;
-    vec3_dup(newSegment.pos,current_position);
-    vec3_dup(newSegment.dir,current_direction);
-    path.push_back(newSegment);
+    // //store current ray 
+    // Segment newSegment;
+    // vec3_dup(newSegment.pos,current_position);
+    // vec3_dup(newSegment.dir,current_direction);
+    // path.push_back(newSegment);
     
 
-    while(true){
-
-        
+    while(true){ 
 
         IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
         if(!hitPoint.found_intersection){
@@ -840,6 +843,9 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
         vec3_dup(newSegment.pos,current_position);
         vec3_dup(newSegment.dir,current_direction);
         path.push_back(newSegment);
+
+        static thread_local std::mt19937 gen(std::random_device{}());
+        std::uniform_real_distribution<float> dis(0.0f, 1.0f);
 
         if(random_next_float(random)> pathContinuationProb){
             break;
@@ -856,6 +862,13 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
         vec3 newDir;
         //sample_hemisphere(newDir, normal, random);
         uniformSampleHemisphere(newDir, normal);
+
+        const float ray_epsilon = 1e-4f;
+
+
+        vec3 offset_position;
+        vec3_scale(offset_position, normal, ray_epsilon);
+        vec3_add(hit_intersection_point,hit_intersection_point,offset_position);
 
 
         //update new ray 
@@ -884,20 +897,38 @@ void get_radiance_at(
     vec3_set(spectralFilter, 1.f);
     vec3 intensity;
     vec3_set(intensity, 0.f);
+    // printf("Path Start Position: (%f, %f, %f)\n",
+    //            path[0].pos[0],
+    //            path[0].pos[1],
+    //            path[0].pos[2]);
+
+
     
     for(size_t i = 0; i < path.size(); i++){
+
         if(i != path.size() - 1){
 
             vec3 hitPosition;
             vec3_dup(hitPosition, path[i+1].pos);
             vec3 hitDirection;
             vec3_dup(hitDirection,path[i].dir);
+            vec3 wi;
+            vec3_dup(wi,path[i+1].dir);
+
+            
 
             SdfResult sample;
             scene_sample(hitPosition, params, &sample);
             vec3 normal;
             get_normal_from(normal, hitPosition, params);
 
+            // float normal_flip = vec3_mul_inner(normal,hitDirection);
+
+            // if(normal_flip > 0){
+            //     vec3_scale(normal,normal,-1.f);
+            // }
+
+           
             // vec3 normal_color;
             // vec3_scale(normal_color, normal, 0.5f);
             // vec3_add(normal_color, normal_color, vec3{0.5f, 0.5f, 0.5f});
@@ -907,42 +938,51 @@ void get_radiance_at(
 
             vec3 emissive;
             vec3_dup(emissive, sample.emissive);
-            // if (emissive[0] != 0.0f || emissive[1] != 0.0f || emissive[2] != 0.0f)
-            // {
+        //     if (emissive[0] != 0.0f || emissive[1] != 0.0f || emissive[2] != 0.0f || spectralFilter[0] != 0.0f || spectralFilter[1] != 0.0f || spectralFilter[2] != 0.0f)
+        //     {
               
-            //     printf("  i=%zu: Hit Emissive Surface!\n", i); // Indicate why we're printing
-            //     printf("    Emissive Raw        : (%f, %f, %f)\n",
-            //            emissive[0], emissive[1], emissive[2]);
+        //         printf("    Emissive Raw        : (%.12f, %.12f, %.12f)\n", // Print 12 decimal places
+        //    emissive[0], emissive[1], emissive[2]);
+        //     // OR
+        //     printf("  i=%zu: spectralFilter (Pre-Emissive): (%e, %e, %e)\n", // Use scientific notation
+        //         i, spectralFilter[0], spectralFilter[1], spectralFilter[2]);
+
+                
               
-            // }
+        //     }
 
             vec3 emissive_part;
             vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-            // printf("  i=%zu: spectralFilter (Pre-Emissive): (%f, %f, %f)\n",
-            //        i, spectralFilter[0], spectralFilter[1], spectralFilter[2]);
-            // printf("  i=%zu: spectralFilter (Pre-Emissive): (%f, %f, %f)\n",
+           
+
+            // if (spectralFilter[0] != 0.0f || spectralFilter[1] != 0.0f || spectralFilter[2] != 0.0f){
+
+            //      printf("  i=%zu: spectralFilter (Pre-Emissive): (%f, %f, %f)\n",
             //        i, spectralFilter[0], spectralFilter[1], spectralFilter[2]);
 
+            // }
+            
             // if (emissive_part[0] != 0.0f || emissive_part[1] != 0.0f || emissive_part[2] != 0.0f){
 
             //     printf("  i=%zu: emissive_part (Pre-Emissive): (%f, %f, %f)\n",
             //        i, emissive_part[0], emissive_part[1], emissive_part[2]);
 
             // }
+
+      
             
             vec3_add(intensity, intensity, emissive_part);
             //vec3_add(intensity,intensity,vec3{0.1f,0.1f,0.1f});
 
-            vec3_scale(spectralFilter,spectralFilter,1 / pathContinuationProb);
+            vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
             // printf("  i=%zu: spectralFilter (Pre-Emissive): (%f, %f, %f)\n",
             //        i, spectralFilter[0], spectralFilter[1], spectralFilter[2]);
 
             float pdf = 2.f * lm_pi;
-            vec3_scale(spectralFilter,spectralFilter,pdf);
+            vec3_scale(spectralFilter,spectralFilter, pdf);
 
-            //float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, hitDirection));
-            float cosine_term = vec3_mul_inner(normal, hitDirection);
-            //printf("cosine term: %f\n", cosine_term); 
+            float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
+            //float cosine_term = vec3_mul_inner(normal, wi);
             vec3_scale(spectralFilter, spectralFilter, cosine_term);
 
             vec3 brdf;
@@ -954,7 +994,9 @@ void get_radiance_at(
     }
 
     vec3_dup(radiance,intensity);
-    //vec3_dup(intensity,intensity);
+    // printf("  i=%zu: intensity (Pre-Emissive): (%f, %f, %f)\n",
+    //                 intensity[0], intensity[1], intensity[2]);
+   
     
     
     
