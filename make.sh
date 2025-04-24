@@ -14,7 +14,7 @@ RUN git clone https://github.com/EnzymeAD/Enzyme
 WORKDIR /usr/local/src/Enzyme
 
 RUN git checkout v0.0.173 && mkdir -p /usr/local/src/Enzyme/enzyme/build && cd /usr/local/src/Enzyme/enzyme/build && cmake -G Ninja .. -DLLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm -DLLVM_EXTERNAL_LIT=/usr/lib/llvm-16/build/utils/lit/lit.py && ninja -j1 
-RUN apt install -y imagemagick 
+RUN apt install -y imagemagick libomp-16-dev
 
 EOF
 
