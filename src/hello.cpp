@@ -41,6 +41,7 @@ const int numberOfSampling = 10;
 typedef struct{
     vec3 pos;
     vec3 dir;
+    vec3 contribution;
 
 }Segment;
 
@@ -907,7 +908,7 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
 
 void get_radiance_at(
     vec3 radiance,
-    std::vector<Segment> path,
+    std::vector<Segment> &path,
     const SceneParams *params,
     const int depth,
     RandomState* random
@@ -1087,7 +1088,7 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
 
 void render_get_radiance_wrapper(
     vec3 radiance,
-    std::vector<Segment> path,
+    std::vector<Segment> &path,
     const float *raw_params,
     RandomState* random
 ) {
@@ -1099,9 +1100,7 @@ void render_get_radiance_wrapper(
 extern void __enzyme_fwddiff_radiance(
     void *,
     int, float *, float *,
-    int, const IntersectionResult *,
-    int, const float *,
-    int, const float *,
+    int, std::vector<Segment>&,
     int, const float *, const float *,
     int, RandomState *
 );
@@ -1118,6 +1117,14 @@ void render_pixel(
     SearchResult critical_point;
     IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
 
+    
+    vec3 o;
+    vec3_dup(o,origin);
+    vec3 d;
+    vec3_dup(d,direction);
+
+    std::vector<Segment> path = getSecondaryPath(o , d ,random,params);
+
     for (int p = 0; p < number_of_scene_params; p++) {
         vec3 radiance;
         vec3_set(radiance, 1.f);
@@ -1129,26 +1136,18 @@ void render_pixel(
         scene_params_set(dummy_params, p, 1.f);
         const float *raw_dummy_params = float_pointer_from_params(dummy_params);
 
-        // __enzyme_fwddiff_radiance(
-        //     (void*)render_get_radiance_wrapper,
-        //     enzyme_dup, radiance, d_radiance,
-        //     enzyme_const, &intersection,
-        //     enzyme_const, origin,
-        //     enzyme_const, direction,
-        //     enzyme_dup, raw_params, raw_dummy_params,
-        //     enzyme_const, random
-        // );
+        __enzyme_fwddiff_radiance(
+            (void*)render_get_radiance_wrapper,
+            enzyme_dup, radiance, d_radiance,
+            enzyme_const, path,
+            enzyme_dup, raw_params, raw_dummy_params,
+            enzyme_const, random
+        );
 
         for (int ch = 0; ch < 3; ch++) {
             scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
         }
     }
-    vec3 o;
-    vec3_dup(o,origin);
-    vec3 d;
-    vec3_dup(d,direction);
-
-    std::vector<Segment> path = getSecondaryPath(o , d ,random,params);
 
     get_radiance_at(real, path, params,depth,random);
 
