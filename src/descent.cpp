@@ -51,8 +51,7 @@ void mse_loss_deriv(Image *real, Image *groundtruth, GradientImage *gradient, Sc
 
             vec3 error;
             vec3_sub(error, pixel_real, pixel_groundtruth);
-            vec3_scale(error, error, 2.f);
-            vec3_scale(error, error, factor);
+            vec3_scale(error, error, factor * 2.0f);
 
             for (int ch = 0; ch < 3; ch++) {
                 scene_params_scale(ppc.rgb[ch], ppc.rgb[ch], error[ch]);
@@ -66,14 +65,12 @@ void mse_loss_deriv(Image *real, Image *groundtruth, GradientImage *gradient, Sc
     }
 }
 
-void gradient_step(SceneParams *params, const SceneParams *deriv, float learning_rate = 500.f) {
+void gradient_step(SceneParams *params, const SceneParams *deriv, float learning_rate, SceneParams *scratch) {
     // TODO: implement a better optimizer like Adam or something
     // *param = *param - learning_rate * deriv;
-    SceneParams *scratch = make_scene_params();
     scene_params_fill(scratch, -learning_rate);
     scene_params_elementwise_mul(scratch, scratch, deriv);
     scene_params_elementwise_add(params, params, scratch);
-    free_scene_params(scratch);
 }
 
 int main(void) {
@@ -91,35 +88,45 @@ int main(void) {
 
     SceneParams *params = make_scene_params();
     SceneParams *loss_deriv = make_scene_params();
+    SceneParams *scratch = make_scene_params();
 
-    const int num_epochs = 20;
+    const float learning_rate = 1e-1f;
+
+    const int num_epochs = 300;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
         render_image(&real, &gradient, params); // calculate radiance and gradients
+        // finite_differences(&gradient, image_width, image_height);
 
         // Compute loss and derivative of loss
         float loss = mse_loss(&real, &groundtruth);
+
         mse_loss_deriv(&real, &groundtruth, &gradient, loss_deriv);
 
         printf("loss: %f\n", loss);
-        // printf("deriv: %f\n", loss_deriv); // TODO: print this struct
+        fflush(stdout);
+        printf("deriv"); // TODO: print this struct
+        for (int p = 0; p < number_of_scene_params; p++) {
+            printf("%f ", scene_parameter_get(loss_deriv, p)); // TODO: print this struct
+        }
+        printf("\n"); // TODO: print this struct
+        fflush(stdout);
 
         // Gradient step
-        gradient_step(params, loss_deriv, 1.0f);
-
-        // printf("param: %f\n", param);
+        gradient_step(params, loss_deriv, learning_rate, scratch);
 
         // Write each frame to a file
         char fn_real[256];
         snprintf(fn_real, sizeof(fn_real), "descent-sequence/real_%04d.ppm", epoch);
         FILE *freal = fopen(fn_real, "w");
-        char fn_gradient[256];
-        snprintf(fn_gradient, sizeof(fn_gradient), "descent-sequence/gradient_%04d.ppm", epoch);
         image_write_ppm(&real, freal);
+        fclose(freal);
     }
 
+    free_scene_params(scratch);
     free_scene_params(loss_deriv);
     free_scene_params(params);
     free_image(&real);
     free_gradient_image(&gradient);
     free_image(&groundtruth);
+    fclose(fgroundtruth);
 }

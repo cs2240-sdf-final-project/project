@@ -19,8 +19,8 @@ typedef struct {
     Strides strides;
     long image_width;
     long image_height;
-    long num_bytes;
-    char *buf;
+    long num_floats;
+    float *buf;
 } Image;
 
 SceneParams *make_scene_params();
@@ -71,5 +71,14 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
 
 void render_image(Image *real, GradientImage *gradient, const SceneParams *params);
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no);
+
+typedef struct PixelRenderer PixelRenderer;
+
+PixelRenderer *make_pixel_renderer(long image_width, long image_height);
+void free_pixel_renderer(PixelRenderer *renderer);
+void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params);
+void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params);
+
+void finite_differences(GradientImage *gradient, long image_width, long image_height);
 
 #endif // HELLO_H

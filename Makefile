@@ -1,6 +1,7 @@
 LLVM_ENZYME=/usr/local/src/Enzyme/enzyme/build/Enzyme/LLVMEnzyme-16.so
-FLAGS=-O3 -g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion
+FLAGS=-Ofast -g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion -fopenmp
 FRONTEND_FLAGS=-fsanitize=address,undefined
+LINK_FLAGS=-lm -lpthread
 
 build: build/debug.exe build/descent.exe
 
@@ -15,13 +16,13 @@ run-descent: build/descent.exe
 	mkdir -p descent-sequence
 	rm -f descent-sequence/*
 	build/descent.exe
-	convert -delay 10 -loop 1 $(shell echo descent-sequence/real_*.ppm) real.gif
+	ffmpeg -framerate 30 -pattern_type glob -i 'descent-sequence/real_*.ppm' descent-sequence.mp4
 
 build/debug.exe: src/debug.cpp build/hello.o
-	clang++-16 $^ $(FRONTEND_FLAGS) $(FLAGS) -o $@
+	clang++-16 $^ $(FRONTEND_FLAGS) $(FLAGS) $(LINK_FLAGS) -o $@
 
 build/descent.exe: src/descent.cpp build/hello.o
-	clang-16 $^ $(FRONTEND_FLAGS) $(FLAGS) -lm -o $@
+	clang++-16 $^ $(FRONTEND_FLAGS) $(FLAGS) $(LINK_FLAGS) -o $@
 
 build/hello.o: build/output.ll
 	clang-16 -c $^ $(FRONTEND_FLAGS) $(FLAGS) -o $@

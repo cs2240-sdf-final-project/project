@@ -7,6 +7,7 @@
 #include "linmath.h"
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <inttypes.h>
 
 #include "hello.h"
 
@@ -15,6 +16,13 @@ int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
 
+// we take steps at most this size in order to avoid missing
+// sign changes in the directional derivatives
+const float max_step_size = 1.0f;
+// take this many steps to balance performance with exploring the entire scene
+const int number_of_steps = 1'000;
+// if our sdf gets smaller than this amount, we will consider it an intersection with the surface
+const float contact_threshold = 1e-4f;
 // width of the scene band
 const float distance_threshold = 5e-2f;
 
@@ -69,6 +77,12 @@ void vec3_set(vec3 out, float value) {
     vec3_dup(out, to_set);
 }
 
+void vec3_componentwise_mul(vec3 out, const vec3 a, const vec3 b) {
+    for (int i = 0; i < 3; i++) {
+        out[i] = a[i] * b[i];
+    }
+}
+
 void vec3_set(vec3 out, float v1, float v2, float v3) {
     vec3 to_set = { v1, v2, v3 };
     vec3_dup(out, to_set);
@@ -120,7 +134,7 @@ float sdfTriPrism(const vec3 origin, float h0, float h1) {
     return dist;
 }
 
-float sdfVerticalCapsule(const vec3 origin, float height, float radius) {
+float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
     vec3 pos;
     vec3_dup(pos, origin);
     pos[1] -= clamp(pos[1], 0.0f, height);
@@ -138,22 +152,15 @@ float sdfSphere(const vec3 pos) {
 }
 
 struct SceneParams {
-    float object_1_x; // 0
-    float object_1_y; // 1
-    float object_1_z; // 2
-    float object_1_r; // 3
-    float object_1_h; // 4
-    float object_2_x; // 5
-    float object_2_y; // 6
-    float object_2_z; // 7
-    float object_2_r; // 8
-    float object_2_h; // 9
+    float object_3_pos[3];
+    float color[3];
+    float h1, h2;
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
 
 SceneParams *make_scene_params() {
-    SceneParams *out = (SceneParams *)calloc(sizeof(float), (size_t)number_of_scene_params);
+    SceneParams *out = (SceneParams *)calloc((size_t)number_of_scene_params, sizeof(float));
     assert(out);
     return out;
 }
@@ -255,27 +262,21 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
 }
 
 static inline void object_cylinder(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    vec3 doffset = {
-        params->object_1_x,
-        params->object_1_y,
-        params->object_1_z};
-    vec3 offset = {-0.4f, -0.2f, 0.2f};
-    vec3_add(offset, offset, pos);
-    vec3_add(offset, offset, doffset);
-    sample->distance = sdfCylinder(offset, 0.3f + params->object_1_r, 0.8f + params->object_1_h);
+    (void)params;
+    vec3 world = {0.6f, 0.2f, -0.2f};
+    vec3 local;
+    vec3_sub(local, pos, world);
+    sample->distance = sdfCylinder(local, 0.3f , 0.8f );
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 static inline void object_capsule(const vec3 pos, const SceneParams *params, SdfResult *sample) {
-    vec3 dpos = {
-        params->object_2_x,
-        params->object_2_y,
-        params->object_2_z};
-    vec3 offset = {0.4f, -0.3f, -0.5f};
-    vec3_add(offset, offset, pos);
-    vec3_add(offset, offset, dpos);
-    sample->distance = sdfVerticalCapsule(offset, 0.5f + params->object_2_h, 0.3f + params->object_2_r);
+    vec3 world = {-0.4f, 0.3f, 0.5f};
+    vec3_add(world, world, params->object_3_pos);
+    vec3 local;
+    vec3_sub(local, pos, world);
+    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -489,12 +490,14 @@ void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsI
     );
 }
 
-inline static void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample) {
+inline static void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample, const SceneParams *params) {
     float lightColors[3][3] = {
-        {.8f, .8f, .8f},
+        {.2f, .1f, .8f},
         {.2f, .2f, .2f},
         {.2f, .2f, .2f},
     };
+    vec3_add(lightColors[0], lightColors[0], params->color);
+    // world[0] -= params->object_3_pos[0];
     float lightDirections[3][3] = {
         {0.f, -1.f, 0.f},
         {-3.f, 2.f, 0.f},
@@ -510,7 +513,9 @@ inline static void phongLight(vec3 radiance, const vec3 looking, const vec3 norm
         vec3_norm(light_dir, lightDirections[l]);
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
         vec3 bounce;
-        vec3_reflect(bounce, light_dir, normal);
+        for (int i = 0; i < 3; i++) {
+            bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
+        }
         float specular = powf(vec3_mul_inner(bounce, looking), sample->shininess);
         for (int i = 0; i < 3; i++) {
             radiance[i] += kd * facing * sample->diffuse[i] * lightColor[i];
@@ -524,20 +529,33 @@ typedef struct {
     float intersection_t;
 } IntersectionResult;
 
+inline static IntersectionResult trace_ray_get_intersection(
+    const vec3 origin,
+    const vec3 direction,
+    const SceneParams *params
+) {
+    float t = 0.0;
+    IntersectionResult ret = { false, 0.0 };
+    for (int i = 0; i < number_of_steps; i++) {
+        vec3 pos;
+        ray_step(pos, origin, direction, t);
+        float distance = scene_sample_sdf(pos, params);
+        if (distance < contact_threshold) {
+            ret.found_intersection = true;
+            ret.intersection_t = t;
+            break;
+        }
+        t += distance;
+    }
+    return ret;
+}
+
 IntersectionResult trace_ray_get_critical_point(
     SearchResult *critical_point,
     const vec3 origin,
     const vec3 direction,
     const SceneParams *params
 ) {
-    // we take steps at most this size in order to avoid missing
-    // sign changes in the directional derivatives
-    const float max_step_size = 1.0f;
-    // take this many steps to balance performance with exploring the entire scene
-    const int number_of_steps = 1'000;
-    // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
-    const float contact_threshold = 1e-4f;
-
     float t = 0.0;
     float previous_t = 0.0;
     critical_point->found_critical_point = false;
@@ -582,9 +600,8 @@ inline static void get_radiance_at(
     scene_sample(current_position, params, &sample);
     vec3 normal;
     get_normal_from(normal, current_position, params);
-    phongLight(radiance, direction, normal, &sample);
+    phongLight(radiance, direction, normal, &sample, params);
 }
-
 
 GradientImage make_gradient_image(long image_width, long image_height) {
     const long num_subpixels = 3;
@@ -611,7 +628,7 @@ void gradient_image_slice(Image *image, const GradientImage *gradient, long para
         ppc.rgb[ch] = make_scene_params();
     }
     for (long r = 0; r < image->image_height; r++) {
-        for (long c = 0; c < image->image_height; c++) {
+        for (long c = 0; c < image->image_width; c++) {
             gradient_image_get(&ppc, gradient, r, c);
 
             vec3 radiance;
@@ -666,11 +683,19 @@ float render_get_radiance_wrapper(
     const vec3 origin,
     const vec3 direction,
     const float *raw_params,
+    const float *surface_sensitivity,
     int ch
 ) {
-    vec3 radiance;
+    float adjustment = 0.0;
+    for (long i = 0; i < number_of_scene_params; i++) {
+        adjustment += surface_sensitivity[i] * raw_params[i];
+    }
+    IntersectionResult sensitivity_adjusted;
+    sensitivity_adjusted.found_intersection = intersection->found_intersection;
+    sensitivity_adjusted.intersection_t = intersection->intersection_t + adjustment;
     const SceneParams *params = params_from_float_pointer(raw_params);
-    get_radiance_at(radiance, intersection, origin, direction, params);
+    vec3 radiance;
+    get_radiance_at(radiance, &sensitivity_adjusted, origin, direction, params);
     return radiance[ch];
 }
 
@@ -680,10 +705,49 @@ extern void __enzyme_autodiff_radiance(
     int, const float *,
     int, const float *,
     int, const float *, float *,
+    int, const float *,
     int, int
 );
 
-void render_pixel(
+void render_pixel_get_radiance(
+    vec3 real,
+    const vec3 origin,
+    const vec3 direction,
+    const SceneParams *params
+) {
+    IntersectionResult intersection = trace_ray_get_intersection(origin, direction, params);
+    get_radiance_at(real, &intersection, origin, direction, params);
+}
+
+float surface_sensitivity_wrapper(const vec3 origin, const vec3 direction, float t, const float *raw_params) {
+    vec3 pos;
+    ray_step(pos, origin, direction, t);
+    SceneParams *params = params_from_float_pointer(raw_params);
+    return scene_sample_sdf(pos, params);
+}
+
+extern void __enzyme_autodiff_surface_sensitivity(
+    void *,
+    int, const float *,
+    int, const float *,
+    int, float, float,
+    int, const float *, float *
+);
+
+void get_surface_sensitivity(const vec3 origin, const vec3 direction, float t, SceneParams *surface_sensitivity, const SceneParams *params) {
+    const float *raw_params = float_pointer_from_params(params);
+    float *raw_surface_sensitivity = float_pointer_from_params(surface_sensitivity);
+    float dt = 1.0f;
+    __enzyme_autodiff_surface_sensitivity(
+        (void*)surface_sensitivity_wrapper,
+        enzyme_const, origin,
+        enzyme_const, direction,
+        enzyme_dup, t, dt,
+        enzyme_dup, raw_params, raw_surface_sensitivity
+    );
+}
+
+void render_pixel_get_gradient(
     vec3 real,
     const vec3 origin,
     const vec3 direction,
@@ -692,6 +756,12 @@ void render_pixel(
 ) {
     SearchResult critical_point;
     IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
+
+    SceneParams *surface_sensitivity_at_intersection = make_scene_params();
+    const float *raw_surface_sensitivity_at_intersection = float_pointer_from_params(surface_sensitivity_at_intersection);
+    if (intersection.found_intersection) {
+        get_surface_sensitivity(origin, direction, intersection.intersection_t, surface_sensitivity_at_intersection, params);
+    } // else: it will be zero, which is what we want
 
     const float *raw_params = float_pointer_from_params(params);
     for (int ch = 0; ch < 3; ch++) {
@@ -705,10 +775,12 @@ void render_pixel(
             enzyme_const, origin,
             enzyme_const, direction,
             enzyme_dupnoneed, raw_params, raw_fill,
+            enzyme_const, raw_surface_sensitivity_at_intersection,
             enzyme_const, ch
         );
     }
 
+    free_scene_params(surface_sensitivity_at_intersection);
     get_radiance_at(real, &intersection, origin, direction, params);
 
     if(critical_point.found_critical_point) {
@@ -721,7 +793,7 @@ void render_pixel(
         vec3 normal;
         get_normal_from(normal, y_star, params);
         vec3 y_star_radiance;
-        phongLight(y_star_radiance, direction, normal, &sample);
+        phongLight(y_star_radiance, direction, normal, &sample, params);
         diff_sdf(y_star, dummy_params, params);
         vec3 deltaL;
         vec3_sub(deltaL, y_star_radiance, real);
@@ -730,8 +802,6 @@ void render_pixel(
         free_scene_params(dummy_params);
     }
 }
-
-
 
 long get_index(Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
@@ -751,6 +821,7 @@ void skip_whitespace_and_comments(FILE *f) {
         }
     }
 }
+
 int image_read_bpm(Image *image, FILE *f) {
     char header[3];
     if (fscanf(f, "%2s", header) != 1 || strcmp(header, "P6") != 0) {
@@ -758,10 +829,14 @@ int image_read_bpm(Image *image, FILE *f) {
         return 0;
     }
     skip_whitespace_and_comments(f);
-    if (fscanf(f, "%ld", &image->image_width) != 1) return 0;
+    long found_width;
+    if (fscanf(f, "%ld", &found_width) != 1) return 0;
+    assert(found_width == image->image_width);
 
     skip_whitespace_and_comments(f);
-    if (fscanf(f, "%ld", &image->image_height) != 1) return 0;
+    long found_height;
+    if (fscanf(f, "%ld", &found_height) != 1) return 0;
+    assert(found_height == image->image_height);
 
     skip_whitespace_and_comments(f);
     int maxval;
@@ -771,19 +846,13 @@ int image_read_bpm(Image *image, FILE *f) {
     }
     // Skip the single whitespace character after maxval
     fgetc(f);
-    image->num_bytes = image->image_width * image->image_height * 3;
-    image->buf = (char *)malloc((size_t)image->num_bytes);
-    if (!image->buf) {
-        fprintf(stderr, "Memory allocation failed\n");
-        return 0;
+    uint8_t *buf = new uint8_t[(size_t)image->num_floats];
+    size_t bytes_read = fread(buf, sizeof(uint8_t), (size_t)image->num_floats, f);
+    assert(bytes_read == (size_t)image->num_floats);
+    for (long i = 0; i < image->num_floats; i++) {
+        image->buf[i] = (float)buf[i] * (1.f / 255.f);
     }
-    size_t bytes_read = fread(image->buf, 1, (size_t)image->num_bytes, f);
-    if (bytes_read != (size_t)image->num_bytes) {
-        fprintf(stderr, "Failed to read image data\n");
-        free(image->buf);
-        image->buf = NULL;
-        return 0;
-    }
+    delete[] buf;
     return 1; // success
 }
 // End PPM Parser from ChatGPT ///////
@@ -791,9 +860,9 @@ int image_read_bpm(Image *image, FILE *f) {
 
 Image make_image(long image_width, long image_height) {
     Image image;
-    long num_bytes = image_width * image_height * 3;
-    assert(num_bytes > 0);
-    char *buf = (char*)malloc((size_t)num_bytes);
+    long num_floats = image_width * image_height * 3;
+    assert(num_floats > 0);
+    float *buf = new float[(size_t)num_floats];
     assert(buf);
     Strides strides;
     strides.row_stride = image_width * 3;
@@ -803,19 +872,25 @@ Image make_image(long image_width, long image_height) {
     image.image_width = image_width;
     image.image_height = image_height;
     image.buf = buf;
-    image.num_bytes = num_bytes;
+    image.num_floats = num_floats;
     return image;
 }
 
 void free_image(Image *image) {
-    free(image->buf);
+    delete[] image->buf;
 }
 
 // https://nullprogram.com/blog/2017/11/03/
 void image_write_ppm(Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
-    assert(image->num_bytes > 0);
-    fwrite(image->buf, 1, (size_t)image->num_bytes, f);
+    assert(image->num_floats > 0);
+    uint8_t *buf = new uint8_t[(size_t)image->num_floats];
+    for (long i = 0; i < image->num_floats; i++) {
+        uint8_t value = (uint8_t)clamp(image->buf[i] * 255.f, 0.f, 255.f);
+        buf[i] = value;
+    }
+    fwrite(buf, 1, (size_t)image->num_floats, f);
+    delete[] buf;
     fflush(f);
 }
 
@@ -826,8 +901,7 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     assert(ic < image->image_width);
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
-        char value = (char)clamp(radiance[p] * 255.f, 0.f, 255.f);
-        image->buf[index] = value;
+        image->buf[index] = radiance[p];
     }
 }
 
@@ -838,13 +912,18 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
     assert(ic < image->image_width);
     for (long p = 0; p < 3; p++) {
         long index = get_index(&image->strides, ir, ic, p);
-        char value = image->buf[index];
-        radiance[p] = (float)value / 255.f;
+        radiance[p] = image->buf[index];
     }
 }
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params) {
-    float aspect = (float)real->image_width / (float)real->image_height ;
+struct PixelRenderer {
+    float world_from_camera[4][4];
+    vec3 camera_position;
+    long image_width, image_height;
+};
+
+PixelRenderer *make_pixel_renderer(long image_width, long image_height) {
+    float aspect = (float)image_width / (float)image_height ;
     float near_clip = 0.1f;
     float far_clip = 100.0f;
     float y_fov = 0.785f;
@@ -864,42 +943,108 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
 
-    SceneParamsPerChannel ppc;
-    for (int c = 0; c < 3; c++) {
-        ppc.rgb[c] = make_scene_params();
-    }
+    PixelRenderer *ret = new PixelRenderer();
+    mat4x4_dup(ret->world_from_camera, world_from_camera);
+    vec3_dup(ret->camera_position, camera_position);
+    ret->image_width = image_width;
+    ret->image_height = image_height;
+    return ret;
+}
 
+void free_pixel_renderer(PixelRenderer *renderer) {
+    delete renderer;
+}
+
+void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params) {
+    float r = (float)ir;
+    float c = (float)ic;
+    float device_x = lerp(c, 0.0, (float)renderer->image_width, -1.0, 1.0);
+    float device_y = lerp(r, 0.0, (float)renderer->image_height, -1.0, 1.0);
+    vec4 unprojected = {device_x, device_y, 1.0, 1.0};
+    vec4 homo;
+    mat4x4_mul_vec4(homo, renderer->world_from_camera, unprojected);
+    vec3 far;
+    dehomogenize(far, homo);
+    vec3 direction;
+    vec3_sub(direction, far, renderer->camera_position);
+    vec3_norm(direction, direction);
+    render_pixel_get_gradient(real, renderer->camera_position, direction, ppc, params);
+}
+
+void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params) {
+    float r = (float)ir;
+    float c = (float)ic;
+    float device_x = lerp(c, 0.0, (float)renderer->image_width, -1.0, 1.0);
+    float device_y = lerp(r, 0.0, (float)renderer->image_height, -1.0, 1.0);
+    vec4 unprojected = {device_x, device_y, 1.0, 1.0};
+    vec4 homo;
+    mat4x4_mul_vec4(homo, renderer->world_from_camera, unprojected);
+    vec3 far;
+    dehomogenize(far, homo);
+    vec3 direction;
+    vec3_sub(direction, far, renderer->camera_position);
+    vec3_norm(direction, direction);
+    render_pixel_get_radiance(real, renderer->camera_position, direction, params);
+}
+
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params) {
+    PixelRenderer *renderer = make_pixel_renderer(real->image_width, real->image_height);
+    #pragma omp parallel for
     for (long ir = 0; ir < real->image_height; ir++) {
-        // if (ir % 50 == 0) {
-        //     printf("on row %ld\n", ir);
-        // }
+        SceneParamsPerChannel ppc;
+        for (int c = 0; c < 3; c++) {
+            ppc.rgb[c] = make_scene_params();
+        }
         for (long ic = 0; ic < real->image_width; ic++) {
-            float r = (float)ir;
-            float c = (float)ic;
-
-            float device_x = lerp(c, 0.0, (float)real->image_width, -1.0, 1.0);
-            float device_y = lerp(r, 0.0, (float)real->image_height, -1.0, 1.0);
-
-            vec4 unprojected = {device_x, device_y, 1.0, 1.0};
-            vec4 homo;
-            mat4x4_mul_vec4(homo, world_from_camera, unprojected);
-            vec3 far;
-            dehomogenize(far, homo);
-
-            vec3 direction;
-            vec3_sub(direction, far, camera_position);
-            vec3_norm(direction, direction);
-
-            // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            render_pixel(out_real, camera_position, direction, &ppc, params);
-
+            project_pixel_get_gradient(out_real, &ppc, renderer, ir, ic, params);
             image_set(real, ir, ic, out_real);
             gradient_image_set(&ppc, gradient, ir, ic);
         }
+        for (int c = 0; c < 3; c++) {
+            free_scene_params(ppc.rgb[c]);
+        }
     }
 
-    for (int c = 0; c < 3; c++) {
-        free_scene_params(ppc.rgb[c]);
+    free_pixel_renderer(renderer);
+}
+
+void finite_differences(GradientImage *gradient, long image_width, long image_height) {
+    const float half_epsilon = 1e-5f;
+
+    PixelRenderer *renderer = make_pixel_renderer(image_width, image_height);
+    #pragma omp parallel for
+    for (long ir = 0; ir < image_height; ir++) {
+        SceneParamsPerChannel ppc;
+        for (int c = 0; c < 3; c++) {
+            ppc.rgb[c] = make_scene_params();
+        }
+        for (long ic = 0; ic < image_width; ic++) {
+            for (long p = 0; p < number_of_scene_params; p++) {
+                SceneParams *params = make_scene_params();
+                scene_params_fill(params, 0.0f);
+                scene_params_set(params, p, -half_epsilon);
+                vec3 real_left;
+                project_pixel_get_radiance(real_left, renderer, ir, ic, params);
+                vec3 real_right;
+                scene_params_fill(params, 0.0f);
+                scene_params_set(params, p, half_epsilon);
+                project_pixel_get_radiance(real_right, renderer, ir, ic, params);
+
+                vec3 gradient;
+                vec3_sub(gradient, real_right, real_left);
+                vec3_scale(gradient, gradient, 1.f / (2.f * (float)half_epsilon));
+
+                for (int ch = 0; ch < 3; ch++) {
+                    scene_params_set(ppc.rgb[ch], p, gradient[ch]);
+                }
+                free_scene_params(params);
+            }
+            gradient_image_set(&ppc, gradient, ir, ic);
+        }
+        for (int ch = 0; ch < 3; ch++) {
+            free_scene_params(ppc.rgb[ch]);
+        }
     }
+    free_pixel_renderer(renderer);
 }
