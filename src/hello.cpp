@@ -326,7 +326,9 @@ static inline void object_bottomwall(const vec3 pos, const SceneParams *params, 
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
-inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *sample) {
+
+inline __attribute__((always_inline)) void
+scene_sample(const vec3 pos, const SceneParams *params, SdfResult *sample) {
     default_scene_sample(sample);
     SdfResult working;
     default_scene_sample(&working);

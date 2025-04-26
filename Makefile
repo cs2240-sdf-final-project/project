@@ -25,10 +25,10 @@ build/descent.exe: src/descent.cpp build/hello.o
 	clang++-16 $^ $(FRONTEND_FLAGS) $(FLAGS) $(LINK_FLAGS) -o $@
 
 build/hello.o: build/output.ll
-	clang-16 -c $^ $(FRONTEND_FLAGS) $(FLAGS) -o $@
+	clang++-16 -c $^ $(FRONTEND_FLAGS) $(FLAGS) -o $@
 
 build/input.ll: src/hello.cpp
-	clang-16 $^ -S -emit-llvm -o $@ $(FLAGS)
+	clang++-16 $^ -S -emit-llvm -o $@ $(FLAGS)
 
 build/output.ll: build/input.ll
 	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) -passes=enzyme -o $@ -S
