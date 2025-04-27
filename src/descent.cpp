@@ -92,10 +92,11 @@ int main(void) {
 
     const float learning_rate = 1e-1f;
 
+    SceneContext *ctx = make_scene_context();
+
     const int num_epochs = 300;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
-        render_image(&real, &gradient, params); // calculate radiance and gradients
-        // finite_differences(&gradient, image_width, image_height);
+        render_image(&real, &gradient, params, ctx); // calculate radiance and gradients
 
         // Compute loss and derivative of loss
         float loss = mse_loss(&real, &groundtruth);

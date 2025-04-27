@@ -6,7 +6,8 @@
 
 extern int number_of_scene_params;
 
-
+typedef struct PixelRenderer PixelRenderer;
+typedef struct SceneContext SceneContext;
 typedef struct SceneParams SceneParams;
 
 typedef struct {
@@ -32,8 +33,9 @@ void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a,
 void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by);
 void scene_params_fill(SceneParams *params, float fill_with);
 
+SceneContext *make_scene_context();
+void free_scene_context(SceneContext *ctx);
 
-void params_increment(SceneParams &params);
 Image make_image(long image_width, long image_height);
 void free_image(Image *image);
 int image_read_bpm(Image *image, FILE *f);
@@ -69,15 +71,13 @@ void free_gradient_image(GradientImage *image);
 void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic);
 void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic);
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params);
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx);
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no);
-
-typedef struct PixelRenderer PixelRenderer;
 
 PixelRenderer *make_pixel_renderer(long image_width, long image_height);
 void free_pixel_renderer(PixelRenderer *renderer);
-void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params);
-void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params);
+void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
+void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
 
 void finite_differences(GradientImage *gradient, long image_width, long image_height);
 

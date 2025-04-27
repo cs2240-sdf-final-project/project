@@ -43,8 +43,9 @@ void render_stuff(void)  {
     Image real = make_image(image_width, image_height);
     SceneParams *params = make_scene_params();
 
+    SceneContext *ctx = make_scene_context();
     GradientImage gradient = make_gradient_image(image_width, image_height);
-    render_image(&real, &gradient, params);
+    render_image(&real, &gradient, params, ctx);
 
     FILE *freal = fopen("real.ppm", "w");
     image_write_ppm(&real, freal);
@@ -59,6 +60,7 @@ void render_stuff(void)  {
         image_write_ppm(&grad_slice, fgradient);
     }
 
+    free_scene_context(ctx);
     free_image(&grad_slice);
     free_image(&real);
     free_gradient_image(&gradient);
