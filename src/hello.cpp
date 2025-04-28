@@ -737,88 +737,209 @@ void uniformSampleHemisphere(vec3 direction, vec3 normal){
 
 
 }
-void test_hemisphere_sampling() {
-    printf("Testing uniformSampleHemisphere orientation...\n");
-    // Adjust num_samples as needed
-    int num_samples = 10000; // How many random directions to test per case
-    int error_count = 0;
-    // Use a small negative tolerance for checks like >= 0
-    // to account for minor floating point inaccuracies near zero
-    float tolerance = -1e-6f;
+// general random number with normal distribution use box muller transform
+float generate_normal_random() {
+    static int has_spare = 0;
+    static float spare_value;
 
-    // --- Test Case 1: Normal = (0, 0, 1) ---
-    printf(" Test 1: Normal = (0, 0, 1). Expecting dir[2] >= 0\n");
-    vec3 test_normal_z_pos;
-    vec3_dup(test_normal_z_pos, vec3{0.f, 0.f, 1.f}); // Use the test normal
-    for (int i = 0; i < num_samples; ++i) {
-        vec3 test_dir;
-        // --- Call your function correctly ---
-        // If it needs PDF: float pdf; uniformSampleHemisphere(test_dir, pdf, test_normal_z_pos);
-        uniformSampleHemisphere(test_dir, test_normal_z_pos); // Pass the correct normal
-        // --- Check the result ---
-        if (test_dir[2] < tolerance) { // Check z component >= 0 (allowing for tolerance)
-            printf("  ERROR (Sample %d): Normal=(0,0,1), Dir=(%f, %f, %f) -> dir[2] < 0!\n",
-                   i, test_dir[0], test_dir[1], test_dir[2]);
-            error_count++;
-             // break; // Optional: Stop this test case on first error
-        }
-    }
-
-    // --- Test Case 2: Normal = (0, 1, 0) ---
-    printf(" Test 2: Normal = (0, 1, 0). Expecting dir[1] >= 0\n");
-    vec3 test_normal_y_pos;
-    vec3_dup(test_normal_y_pos, vec3{0.f, 1.f, 0.f}); // Use the test normal
-    for (int i = 0; i < num_samples; ++i) {
-        vec3 test_dir;
-        uniformSampleHemisphere(test_dir, test_normal_y_pos); // Pass the correct normal
-        if (test_dir[1] < tolerance) { // Check y component >= 0
-            printf("  ERROR (Sample %d): Normal=(0,1,0), Dir=(%f, %f, %f) -> dir[1] < 0!\n",
-                   i, test_dir[0], test_dir[1], test_dir[2]);
-            error_count++;
-            // break;
-        }
-    }
-
-    // --- Test Case 3: Normal = (1, 0, 0) ---
-    printf(" Test 3: Normal = (1, 0, 0). Expecting dir[0] >= 0\n");
-    vec3 test_normal_x_pos;
-    vec3_dup(test_normal_x_pos, vec3{1.f, 0.f, 0.f}); // Use the test normal
-    for (int i = 0; i < num_samples; ++i) {
-        vec3 test_dir;
-        uniformSampleHemisphere(test_dir, test_normal_x_pos); // Pass the correct normal
-        if (test_dir[0] < tolerance) { // Check x component >= 0
-            printf("  ERROR (Sample %d): Normal=(1,0,0), Dir=(%f, %f, %f) -> dir[0] < 0!\n",
-                   i, test_dir[0], test_dir[1], test_dir[2]);
-            error_count++;
-            // break;
-        }
-    }
-
-    // --- Test Case 4: Normal = (0, 0, -1) ---
-    printf(" Test 4: Normal = (0, 0, -1). Expecting dir[2] <= 0\n");
-    vec3 test_normal_z_neg;
-    vec3_dup(test_normal_z_neg, vec3{0.f, 0.f, -1.f}); // Use the test normal
-    for (int i = 0; i < num_samples; ++i) {
-        vec3 test_dir;
-        uniformSampleHemisphere(test_dir, test_normal_z_neg); // Pass the correct normal
-        // Check z component <= 0 (allowing for tolerance)
-        // test_dir[2] > -tolerance is equivalent to test_dir[2] > tolerance_positive
-        if (test_dir[2] > -tolerance) {
-            printf("  ERROR (Sample %d): Normal=(0,0,-1), Dir=(%f, %f, %f) -> dir[2] > 0!\n",
-                   i, test_dir[0], test_dir[1], test_dir[2]);
-            error_count++;
-            // break;
-        }
-    }
-
-    // --- Summary ---
-    printf("----------------------------------------\n");
-    if (error_count == 0) {
-        printf("Hemisphere sampling orientation test PASSED for %d samples per case.\n", num_samples);
+    if (has_spare) {
+        has_spare = 0;
+        return spare_value;
     } else {
-        printf("Hemisphere sampling orientation test FAILED with %d error(s).\n", error_count);
+        float u1, u2, radius_sq;
+        // Ensure u1 is never exactly 0 for log()
+        do {
+            // Generate two uniform random numbers in (0, 1]
+            u1 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
+            u2 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
+
+            // Basic Box-Muller requires log(u1), ensure u1 > 0
+        } while (u1 <= 1e-9); // Avoid log(0) or very small numbers
+
+        float radius = sqrtf(-2.0f * logf(u1));
+        float angle = 2.0f * M_PI * u2;
+
+        has_spare = 1;
+        spare_value = radius * sinf(angle); // Store the second value
+        return radius * cosf(angle);        // Return the first value
     }
-    printf("----------------------------------------\n");
+}
+
+
+
+void sample_points_on_plane(int num_points, const vec3 center_on_plane, float stddev, vec3 *output_points) {
+    if (fabsf(center_on_plane[1] - 1.0f) > 1e-6) {
+         fprintf(stderr, "Warning: Center point provided is not on the plane y=1.0\n");
+         // Adjust center y to be exactly on the plane if desired, or proceed.
+         // center_on_plane.y = 1.0f; // Optional correction
+    }
+
+    for (int i = 0; i < num_points; ++i) {
+        // Generate standard normal random numbers (mean 0, stddev 1)
+        float rand_x_std = generate_normal_random();
+        float rand_z_std = generate_normal_random();
+
+        // Scale by standard deviation and add to the center coordinates
+        float point_x = center_on_plane[0] + stddev * rand_x_std;
+        float point_z = center_on_plane[2] + stddev * rand_z_std;
+        float point_y = center_on_plane[1]; // Keep y fixed on the plane
+
+        vec3_set(output_points[i], point_x, point_y, point_z);
+    }
+}
+
+float normal_pdf(float x, float mu, float sigma) {
+    if (sigma <= 0.0f) { return 0.0f; } // Avoid division by zero / invalid input
+    float diff = x - mu;
+    float exponent = -(diff * diff) / (2.0f * sigma * sigma);
+    float scaling_factor = 1.0f / (sigma * sqrtf(2.0f * lm_pi));
+    return scaling_factor * expf(exponent);
+}
+// --------------------------------------------------------------------
+
+/**
+ * @brief Calculates the joint PDF for a point on a plane, assuming its X and Z
+ * coordinates were sampled independently from N(center.x, sigma^2)
+ * and N(center.z, sigma^2) respectively.
+ * Assumes point.y is fixed and matches center.y implicitly.
+ *
+ * @param point The vec3 point (e.g., {px, py, pz}) to evaluate.
+ * @param center The vec3 center of the distribution on the plane (e.g., {cx, cy, cz}).
+ * @param sigma The standard deviation used for sampling X and Z.
+ * @return float The joint probability density value for the XZ coordinates.
+ */
+float plane_pdf_independent_xz(const vec3 point, const vec3 center, float sigma) {
+    // Assumes point and center are float[3] or compatible struct access
+    // Use point[0] or point.x depending on your vec3 definition
+    float pdf_x = normal_pdf(point[0], center[0], sigma);
+    float pdf_z = normal_pdf(point[2], center[2], sigma);
+
+    // Joint PDF is the product due to independence
+    return pdf_x * pdf_z;
+}
+
+
+
+
+
+void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult sample,const SceneParams *params, vec3 directLighting){
+
+    int num_samples = 10;
+    vec3 sampled_points[num_samples];
+
+    vec3 center;
+    vec3_set(center, 0.0f, 1.0f, 0.0f); // Center of distribution on the plane y=1.0
+    float standard_deviation = 0.5f;     // Adjust spread as needed
+
+    sample_points_on_plane(num_samples, center, standard_deviation, sampled_points);
+
+
+    vec3 contribution;
+    vec3_set(contribution,0.0f);
+    
+    for(int i = 0; i < num_samples;i++){
+        vec3 currentSamplePoint;
+
+        vec3_dup(currentSamplePoint,sampled_points[i]);
+
+        vec3 light_direction;
+
+        vec3_sub(light_direction,currentSamplePoint,hitPoint);
+
+        float distance2 = vec3_mul_inner(light_direction, light_direction);
+
+        vec3_norm(light_direction,light_direction);
+
+        IntersectionResult shadow_hit_point = trace_ray(hitPoint,light_direction,params);
+        if(shadow_hit_point.found_intersection){
+            vec3 shadow_hit_intersection_point;
+            ray_step(shadow_hit_intersection_point, hitPoint, light_direction, shadow_hit_point.intersection_t);
+
+            vec3 diff_hit;
+            vec3_sub(diff_hit,shadow_hit_intersection_point,hitPoint);
+            float hitDistance = vec3_len(diff_hit); 
+            
+            vec3 diff_light;
+            vec3_sub(diff_light,currentSamplePoint,hitPoint);
+            float distToLight = vec3_len(diff_light);
+
+            if(fabsf(hitDistance - distToLight) < 1e-4f){
+
+                float costheta = fmaxf(0.f, vec3_mul_inner(light_direction,hitNormal));
+
+                vec3 emission;
+                vec3_set(emission, 0.9f);
+                vec3 lightNormal;
+                vec3_set(lightNormal,0.0f,1.0f,0.0f);
+
+                float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction,lightNormal));
+
+                vec3 bsdf;
+                vec3_set(bsdf,1.0f);
+
+                if(sample.isReflected){
+
+                    vec3 incidentDir; // Vector from light source TOWARDS hit point
+                    vec3_scale(incidentDir, light_direction, -1.0f);
+                    vec3 refl_dir;
+                    vec3_reflect(refl_dir,incidentDir,hitNormal);
+
+                    vec3 viewDir; // Vector from hit point TOWARDS the viewer/camera
+                    vec3_scale(viewDir, rayDir, -1.0f);
+
+                    float cosThetaOut = fmaxf(0.0f,vec3_mul_inner(refl_dir, viewDir));
+
+
+                    // Calculate the Phong power term
+                    float phongFactor = powf(fmaxf(0.0f, cosThetaOut), sample.shininess); // Use powf from math.h (std::pow equivalent)
+                    
+                    // Calculate the normalization factor
+                    float normFactor = (sample.shininess + 2.0f) / (2.0f * M_PI); // Use M_PI from math.h
+                
+                    // Calculate the final scalar multiplier
+                    float scalarMultiplier = normFactor * phongFactor;
+                
+                    // Scale the base specular color
+                    vec3_scale(bsdf, sample.specular, scalarMultiplier);
+
+                    
+
+                }else{
+
+                    vec3_scale(bsdf,sample.diffuse, 1.0f / lm_pi);
+                }
+
+                float pdf = plane_pdf_independent_xz(currentSamplePoint,center,standard_deviation);
+
+                
+
+                float last_term = costheta * cosThetaPrime / ((distance2 + 1e-6f) * pdf);
+
+                vec3_scale(bsdf, bsdf,last_term);
+                vec3_cwiseProduct(bsdf,bsdf,emission);
+
+                vec3_add(contribution,contribution,bsdf);
+
+            
+
+
+            }
+
+            
+
+
+            
+        }
+       
+
+
+
+       
+    }
+    vec3_scale(contribution,contribution,1.0f/num_samples);
+    vec3_dup(directLighting,contribution);
+
+
 }
 
 std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *random,const SceneParams *params){
@@ -829,17 +950,14 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
     vec3_dup(current_position, origin);
     vec3 current_direction;
     vec3_dup(current_direction,direction);
-    // IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
-    
-    // //store current ray 
-    // Segment newSegment;
-    // vec3_dup(newSegment.pos,current_position);
-    // vec3_dup(newSegment.dir,current_direction);
-    // path.push_back(newSegment);
-    
+    vec3 previous_direction;
+    vec3_set(previous_direction,0.0f);
+
+    int iter = 0;
+
 
     while(true){ 
-
+        iter++;
         IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
         if(!hitPoint.found_intersection){
             return path;
@@ -848,6 +966,24 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
         Segment newSegment;
         vec3_dup(newSegment.pos,current_position);
         vec3_dup(newSegment.dir,current_direction);
+
+        vec3 directLighting;
+
+        if(iter == 0){
+            vec3_set(directLighting, 0.0f);
+        }else{
+            SdfResult hit_sample;
+            scene_sample(current_position, params, &hit_sample);
+
+            vec3 hit_normal;
+            get_normal_from(hit_normal, current_position, params);
+
+            computeDirectLighting(current_position,hit_normal,previous_direction,hit_sample,params,directLighting);
+
+        }
+        vec3_dup(newSegment.contribution,directLighting);
+    
+
         path.push_back(newSegment);
 
         static thread_local std::mt19937 gen(std::random_device{}());
@@ -891,9 +1027,12 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
         vec3_scale(offset_position, normal, ray_epsilon);
         vec3_add(hit_intersection_point,hit_intersection_point,offset_position);
 
+        
+
 
         //update new ray 
         vec3_dup(current_position,hit_intersection_point);
+        vec3_dup(previous_direction,current_direction);
         vec3_dup(current_direction,newDir);
 
 
@@ -906,6 +1045,8 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
 }
 
 
+
+
 void get_radiance_at(
     vec3 radiance,
     std::vector<Segment> &path,
@@ -914,6 +1055,8 @@ void get_radiance_at(
     RandomState* random
 
 ) {
+    bool directlightOnly;
+    bool countEmitted = true;
     vec3 spectralFilter;
     vec3_set(spectralFilter, 1.f);
     vec3 intensity;
@@ -943,30 +1086,19 @@ void get_radiance_at(
             vec3 normal;
             get_normal_from(normal, hitPosition, params);
 
-            // float normal_flip = vec3_mul_inner(normal,hitDirection);
-
-            // if(normal_flip > 0){
-            //     vec3_scale(normal,normal,-1.f);
-            // }
-
-           
-            // vec3 normal_color;
-            // vec3_scale(normal_color, normal, 0.5f);
-            // vec3_add(normal_color, normal_color, vec3{0.5f, 0.5f, 0.5f});
-            // vec3_dup(radiance, normal_color);
             
                         
-
-            vec3 emissive;
-            vec3_dup(emissive, sample.emissive);
-
-
-            vec3 emissive_part;
-            vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-           
-      
+            if (countEmitted) {
+                vec3 emissive;
+                vec3_dup(emissive, sample.emissive);
+    
+                vec3 emissive_part;
+                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
             
-            vec3_add(intensity, intensity, emissive_part);
+                vec3_add(intensity, intensity, emissive_part);
+            }
+            countEmitted = false;
+
             //vec3_add(intensity,intensity,vec3{0.1f,0.1f,0.1f});
 
             if(sample.isReflected){
@@ -995,15 +1127,15 @@ void get_radiance_at(
             }
              
 
-           
-
+        }
+        if(directlightOnly){
+            break;
         }
         
     }
 
     vec3_dup(radiance,intensity);
-    // printf("  i=%zu: intensity (Pre-Emissive): (%f, %f, %f)\n",
-    //                 intensity[0], intensity[1], intensity[2]);
+
    
     
     
