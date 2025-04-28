@@ -11,7 +11,7 @@ float gradient_scaling_factor(long image_width, long image_height) {
     return 1.f / (float)size;
 }
 
-float mse_loss(Image *real, Image *groundtruth) {
+float mse_loss(const Image *real, const Image *groundtruth) {
     float loss = 0.f;
     for (long ir = 0; ir < real->image_height; ir++) {
         for (long ic = 0; ic < real->image_width; ic++) {
@@ -29,12 +29,12 @@ float mse_loss(Image *real, Image *groundtruth) {
     return loss * gradient_scaling_factor(real->image_width, real->image_height);
 }
 
-void mse_loss_deriv(Image *real, Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv) {
-    scene_params_fill(loss_deriv, 0.0);
+void mse_loss_deriv(const Image *real, const Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv) {
+    // start out with scene consistency
 
     SceneParamsPerChannel ppc;
     for (int c = 0; c < 3; c++) {
-        ppc.rgb[c] = make_scene_params();
+        ppc.rgb[c] = uninit_scene_params();
     }
 
     float factor = gradient_scaling_factor(real->image_width, real->image_height);
@@ -65,6 +65,19 @@ void mse_loss_deriv(Image *real, Image *groundtruth, GradientImage *gradient, Sc
     }
 }
 
+float total_loss(const Image *real, const Image *groundtruth, const SceneParams *params) {
+    float loss_image = mse_loss(real, groundtruth);
+    float loss_scene_consistency = scene_consistency_loss(params);
+    // return loss_image + loss_scene_consistency;
+    return loss_image;
+}
+
+void total_loss_deriv(const Image *real, Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv_out, SceneParams *scratch, const SceneParams *params) {
+    // scene_consistency_gradient(params, scratch);
+    mse_loss_deriv(real, groundtruth, gradient, loss_deriv_out);
+    // scene_params_elementwise_add(loss_deriv_out, loss_deriv_out, scratch);
+}
+
 void gradient_step(SceneParams *params, const SceneParams *deriv, float learning_rate, SceneParams *scratch) {
     // TODO: implement a better optimizer like Adam or something
     // *param = *param - learning_rate * deriv;
@@ -86,22 +99,22 @@ int main(void) {
     Image groundtruth = make_image(image_width, image_height);
     image_read_bpm(&groundtruth, fgroundtruth);
 
-    SceneParams *params = make_scene_params();
-    SceneParams *loss_deriv = make_scene_params();
-    SceneParams *scratch = make_scene_params();
+    SceneContext *ctx = make_scene_context();
+
+    SceneParams *params = uninit_scene_params();
+    scene_params_init(params, ctx);
+    SceneParams *loss_deriv = uninit_scene_params();
+    SceneParams *scratch = uninit_scene_params();
 
     const float learning_rate = 1e-1f;
-
-    SceneContext *ctx = make_scene_context();
 
     const int num_epochs = 300;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
         render_image(&real, &gradient, params, ctx); // calculate radiance and gradients
 
         // Compute loss and derivative of loss
-        float loss = mse_loss(&real, &groundtruth);
-
-        mse_loss_deriv(&real, &groundtruth, &gradient, loss_deriv);
+        float loss = total_loss(&real, &groundtruth, params);
+        total_loss_deriv(&real, &groundtruth, &gradient, loss_deriv, scratch, params);
 
         printf("loss: %f\n", loss);
         fflush(stdout);

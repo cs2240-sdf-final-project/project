@@ -62,8 +62,9 @@ void render_stuff(const SceneParams *params, const SceneContext *ctx)  {
 }
 
 int main(void) {
-    SceneParams *params = make_scene_params();
     SceneContext *ctx = make_scene_context();
+    SceneParams *params = uninit_scene_params();
+    scene_params_init(params, ctx);
     render_stuff(params, ctx);
     render_things(params, ctx);
     free_scene_params(params);

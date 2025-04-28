@@ -24,7 +24,8 @@ typedef struct {
     float *buf;
 } Image;
 
-SceneParams *make_scene_params();
+SceneParams *uninit_scene_params();
+void scene_params_init(SceneParams *params, const SceneContext *ctx);
 void free_scene_params(SceneParams *params);
 float scene_parameter_get(const SceneParams *params, long p);
 void scene_params_set(SceneParams *params, long p, float value);
@@ -33,15 +34,19 @@ void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a,
 void scene_params_scale(SceneParams *out_params, const SceneParams *a, float scale_by);
 void scene_params_fill(SceneParams *params, float fill_with);
 
+
+float scene_consistency_loss(const SceneParams *params);
+void scene_consistency_gradient(const SceneParams *params, SceneParams *gradient_out);
+
 SceneContext *make_scene_context();
 void free_scene_context(SceneContext *ctx);
 
 Image make_image(long image_width, long image_height);
 void free_image(Image *image);
 int image_read_bpm(Image *image, FILE *f);
-void image_write_ppm(Image *image, FILE *f);
+void image_write_ppm(const Image *image, FILE *f);
 void image_set(Image *image, long ir, long ic, const vec3 radiance);
-void image_get(vec3 radiance, Image *image, long ir, long ic);
+void image_get(vec3 radiance, const Image *image, long ir, long ic);
 
 const int RED = 0;
 const int GREEN = 1;

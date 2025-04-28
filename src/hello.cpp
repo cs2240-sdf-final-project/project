@@ -202,14 +202,13 @@ struct SceneParams {
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
 
-SceneParams *make_scene_params() {
-    SceneParams *out = (SceneParams *)calloc((size_t)number_of_scene_params, sizeof(float));
-    assert(out);
+SceneParams *uninit_scene_params() {
+    SceneParams *out = new SceneParams;
     return out;
 }
 
 void free_scene_params(SceneParams *params) {
-    free(params);
+    delete params;
 }
 
 static inline SceneParams *params_from_float_pointer(const float *params) {
@@ -222,6 +221,24 @@ static const float *float_pointer_from_params(const SceneParams *out) {
 
 static float *float_pointer_from_params(SceneParams *out) {
     return (float *)out;
+}
+
+void scene_params_init(SceneParams *params, const SceneContext *ctx) {
+    (void)ctx;
+    float *raw_params = float_pointer_from_params(params);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_params[i] = 0.f;
+    }
+}
+
+float scene_consistency_loss(const SceneParams *params) {
+    (void)params;
+    return 0.0;
+}
+
+void scene_consistency_gradient(const SceneParams *params, SceneParams *gradient_out) {
+    (void)params;
+    scene_params_fill(gradient_out, 0.0);
 }
 
 void scene_params_copy(SceneParams *out, const SceneParams *params) {
@@ -695,7 +712,7 @@ GradientImage make_gradient_image(long image_width, long image_height) {
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no) {
     SceneParamsPerChannel ppc;
     for (int ch = 0; ch < 3; ch++) {
-        ppc.rgb[ch] = make_scene_params();
+        ppc.rgb[ch] = uninit_scene_params();
     }
     for (long r = 0; r < image->image_height; r++) {
         for (long c = 0; c < image->image_width; c++) {
@@ -822,7 +839,7 @@ void render_pixel_get_gradient(
     get_radiance_at(real, &intersection, origin, direction, params, ctx);
 
     if(critical_point.found_critical_point) {
-        SceneParams *dummy_params = make_scene_params();
+        SceneParams *dummy_params = uninit_scene_params();
         scene_params_fill(dummy_params, 0.f);
         vec3 y_star;
         ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
@@ -841,7 +858,7 @@ void render_pixel_get_gradient(
     }
 }
 
-long get_index(Strides *s, long r, long c, long p) {
+inline long get_index(const Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
 }
 
@@ -919,7 +936,7 @@ void free_image(Image *image) {
 }
 
 // https://nullprogram.com/blog/2017/11/03/
-void image_write_ppm(Image *image, FILE *f) {
+void image_write_ppm(const Image *image, FILE *f) {
     fprintf(f, "P6\n%ld %ld\n255\n", image->image_width, image->image_height);
     assert(image->num_floats > 0);
     uint8_t *buf = new uint8_t[(size_t)image->num_floats];
@@ -943,7 +960,7 @@ void image_set(Image *image, long ir, long ic, const vec3 radiance) {
     }
 }
 
-void image_get(vec3 radiance, Image *image, long ir, long ic) {
+void image_get(vec3 radiance, const Image *image, long ir, long ic) {
     assert(ir >= 0);
     assert(ir < image->image_height);
     assert(ic >= 0);
@@ -1031,7 +1048,7 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     for (long ir = 0; ir < real->image_height; ir++) {
         SceneParamsPerChannel ppc;
         for (int c = 0; c < 3; c++) {
-            ppc.rgb[c] = make_scene_params();
+            ppc.rgb[c] = uninit_scene_params();
         }
         for (long ic = 0; ic < real->image_width; ic++) {
             vec3 out_real;
@@ -1052,10 +1069,10 @@ void finite_differences(GradientImage *gradient, long image_width, long image_he
     PixelRenderer *renderer = make_pixel_renderer(image_width, image_height);
     #pragma omp parallel for
     for (long ir = 0; ir < image_height; ir++) {
-        SceneParams *working = make_scene_params();
+        SceneParams *working = uninit_scene_params();
         SceneParamsPerChannel ppc;
         for (int c = 0; c < 3; c++) {
-            ppc.rgb[c] = make_scene_params();
+            ppc.rgb[c] = uninit_scene_params();
         }
         for (long ic = 0; ic < image_width; ic++) {
             for (long p = 0; p < number_of_scene_params; p++) {
