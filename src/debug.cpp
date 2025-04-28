@@ -1,5 +1,6 @@
 #include <fstream>
 #include <iomanip>
+#include <cassert>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -9,7 +10,7 @@
 #include <stdlib.h>
 #include "hello.h"
 
-void render_things(const SceneParams *params, const SceneContext *ctx)  {
+static void debug_fd(const SceneParams *params, const SceneContext *ctx)  {
     mkdir("debug-fd", 0777); // do nothing if debug-fd already exists
 
     long image_width = 500;
@@ -21,7 +22,7 @@ void render_things(const SceneParams *params, const SceneContext *ctx)  {
     Image grad_slice = make_image(image_width, image_height);
     for (long p = 0; p < number_of_scene_params; p++) {
         std::ostringstream filename;
-        filename << "debug-fd/gradient_" << std::setw(3) << std::setfill('0') << p << ".ppm";
+        filename << "debug-fd/fd_" << std::setw(3) << std::setfill('0') << p << ".ppm";
         std::string filename_string = filename.str();
         FILE *fgradient = fopen(filename_string.c_str(), "w");
         gradient_image_slice(&grad_slice, &gradient, p);
@@ -32,8 +33,7 @@ void render_things(const SceneParams *params, const SceneContext *ctx)  {
     free_gradient_image(&gradient);
 }
 
-
-void render_stuff(const SceneParams *params, const SceneContext *ctx)  {
+static void debug_gradient(const SceneParams *params, const SceneContext *ctx)  {
     mkdir("debug-gradient", 0777); // do nothing if debug-gradient already exists
 
     long image_width = 500;
@@ -65,8 +65,8 @@ int main(void) {
     SceneContext *ctx = make_scene_context();
     SceneParams *params = uninit_scene_params();
     scene_params_init(params, ctx);
-    render_stuff(params, ctx);
-    render_things(params, ctx);
+    debug_gradient(params, ctx);
+    debug_fd(params, ctx);
     free_scene_params(params);
     free_scene_context(ctx);
 }

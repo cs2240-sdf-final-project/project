@@ -30,7 +30,7 @@ float mse_loss(const Image *real, const Image *groundtruth) {
 }
 
 void mse_loss_deriv(const Image *real, const Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv) {
-    // start out with scene consistency
+    scene_params_fill(loss_deriv, 0.0);
 
     SceneParamsPerChannel ppc;
     for (int c = 0; c < 3; c++) {
@@ -68,14 +68,13 @@ void mse_loss_deriv(const Image *real, const Image *groundtruth, GradientImage *
 float total_loss(const Image *real, const Image *groundtruth, const SceneParams *params) {
     float loss_image = mse_loss(real, groundtruth);
     float loss_scene_consistency = scene_consistency_loss(params);
-    // return loss_image + loss_scene_consistency;
-    return loss_image;
+    return loss_image + loss_scene_consistency;
 }
 
 void total_loss_deriv(const Image *real, Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv_out, SceneParams *scratch, const SceneParams *params) {
-    // scene_consistency_gradient(params, scratch);
+    scene_consistency_gradient(params, scratch);
     mse_loss_deriv(real, groundtruth, gradient, loss_deriv_out);
-    // scene_params_elementwise_add(loss_deriv_out, loss_deriv_out, scratch);
+    scene_params_elementwise_add(loss_deriv_out, loss_deriv_out, scratch);
 }
 
 void gradient_step(SceneParams *params, const SceneParams *deriv, float learning_rate, SceneParams *scratch) {

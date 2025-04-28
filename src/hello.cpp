@@ -54,8 +54,7 @@ inline float bisect(float t_min, float t_max,
 
 void ray_step(vec3 out, const vec3 origin, const vec3 direction, float t) {
     vec3 step_size;
-    vec3_dup(step_size, direction);
-    vec3_scale(step_size, step_size, t);
+    vec3_scale(step_size, direction, t);
     vec3_add(out, origin, step_size);
 }
 
@@ -203,7 +202,12 @@ struct SceneParams {
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
 
 SceneParams *uninit_scene_params() {
+    float nan = nanf("");
     SceneParams *out = new SceneParams;
+    for (int p = 0; p < number_of_scene_params; p++) {
+        scene_params_set(out, p, nan);
+    }
+    assert(out);
     return out;
 }
 
@@ -709,6 +713,17 @@ GradientImage make_gradient_image(long image_width, long image_height) {
     return ret;
 }
 
+static void params_nan_to_num(SceneParamsPerChannel *ppc, float num) {
+    for (int ch = 0; ch < 3; ch++) {
+        for (long p = 0; p < number_of_scene_params; p++) {
+            float param = scene_parameter_get(ppc->rgb[ch], p);
+            if (isnan(param)) {
+                scene_params_set(ppc->rgb[ch], p, num);
+            }
+        }
+    }
+}
+
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no) {
     SceneParamsPerChannel ppc;
     for (int ch = 0; ch < 3; ch++) {
@@ -856,6 +871,8 @@ void render_pixel_get_gradient(
         outer_product_add_assign(params_per_channel, dummy_params, deltaL);
         free_scene_params(dummy_params);
     }
+
+    params_nan_to_num(params_per_channel, 0.0);
 }
 
 inline long get_index(const Strides *s, long r, long c, long p) {
