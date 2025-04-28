@@ -9,15 +9,14 @@
 #include <stdlib.h>
 #include "hello.h"
 
-void render_things(void)  {
+void render_things(const SceneParams *params, const SceneContext *ctx)  {
     mkdir("debug-fd", 0777); // do nothing if debug-fd already exists
 
     long image_width = 500;
     long image_height = 500;
-    SceneParams *params = make_scene_params();
 
     GradientImage gradient = make_gradient_image(image_width, image_height);
-    finite_differences(&gradient, image_width, image_height);
+    finite_differences(&gradient, image_width, image_height, params, ctx);
 
     Image grad_slice = make_image(image_width, image_height);
     for (long p = 0; p < number_of_scene_params; p++) {
@@ -31,19 +30,16 @@ void render_things(void)  {
 
     free_image(&grad_slice);
     free_gradient_image(&gradient);
-    free_scene_params(params);
 }
 
 
-void render_stuff(void)  {
+void render_stuff(const SceneParams *params, const SceneContext *ctx)  {
     mkdir("debug-gradient", 0777); // do nothing if debug-gradient already exists
 
     long image_width = 500;
     long image_height = 500;
     Image real = make_image(image_width, image_height);
-    SceneParams *params = make_scene_params();
 
-    SceneContext *ctx = make_scene_context();
     GradientImage gradient = make_gradient_image(image_width, image_height);
     render_image(&real, &gradient, params, ctx);
 
@@ -60,14 +56,16 @@ void render_stuff(void)  {
         image_write_ppm(&grad_slice, fgradient);
     }
 
-    free_scene_context(ctx);
     free_image(&grad_slice);
     free_image(&real);
     free_gradient_image(&gradient);
-    free_scene_params(params);
 }
 
 int main(void) {
-    render_stuff();
-    render_things();
+    SceneParams *params = make_scene_params();
+    SceneContext *ctx = make_scene_context();
+    render_stuff(params, ctx);
+    render_things(params, ctx);
+    free_scene_params(params);
+    free_scene_context(ctx);
 }

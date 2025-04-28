@@ -25,7 +25,7 @@ const int number_of_steps = 1'000;
 // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
 const float contact_threshold = 1e-4f;
 // width of the scene band
-const float distance_threshold = 5e-1f;
+const float distance_threshold = 1e-2f;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -95,34 +95,34 @@ void vec2_abs(vec2 out, const vec2 in) {
     }
 }
 
-// inline float sdfGrid(
-//     const vec3 pos,
-//     const long strides[3],
-//     const long dim[3],
-//     const float *sds
-// ) {
-//     const float sigma = 0.1f;
-//     float accum = 0.0;
-//     for (long x0 = 0; x0 < dim[0]; x0++) {
-//         float fx0 = (float)x0 / (float)dim[0];
-//         for (long x1 = 0; x1 < dim[1]; x1++) {
-//             float fx1 = (float)x1 / (float)dim[1];
-//             for (long x2 = 0; x2 < dim[2]; x2++) {
-//                 float fx2 = (float)x2 / (float)dim[2];
-//                 vec3 fx = {fx0, fx1, fx2};
-//                 vec3 displacement;
-//                 vec3_sub(displacement, pos, fx);
-//                 float distance = vec3_len(displacement);
-//                 float numer = expf(-distance * distance * (1.f / (2.f * sigma * sigma)));
-//                 float denom = sqrtf(2.f * (float)M_PI * sigma * sigma);
-//                 float weight = numer / denom;
-//                 long i = x0 * strides[0] + x1 * strides[1] + x2 * strides[2];
-//                 accum += weight * sds[i];
-//             }
-//         }
-//     }
-//     return accum;
-// }
+inline float sdfGrid(
+    const vec3 pos,
+    const long strides[3],
+    const long dim[3],
+    const float *sds
+) {
+    const float sigma = 0.1f;
+    float accum = 0.0;
+    for (long x0 = 0; x0 < dim[0]; x0++) {
+        float fx0 = (float)x0 / (float)dim[0];
+        for (long x1 = 0; x1 < dim[1]; x1++) {
+            float fx1 = (float)x1 / (float)dim[1];
+            for (long x2 = 0; x2 < dim[2]; x2++) {
+                float fx2 = (float)x2 / (float)dim[2];
+                vec3 fx = {fx0, fx1, fx2};
+                vec3 displacement;
+                vec3_sub(displacement, pos, fx);
+                float distance = vec3_len(displacement);
+                float numer = expf(-distance * distance * (1.f / (2.f * sigma * sigma)));
+                float denom = sqrtf(2.f * (float)M_PI * sigma * sigma);
+                float weight = numer / denom;
+                long i = x0 * strides[0] + x1 * strides[1] + x2 * strides[2];
+                accum += weight * sds[i];
+            }
+        }
+    }
+    return accum;
+}
 
 float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
@@ -222,6 +222,14 @@ static const float *float_pointer_from_params(const SceneParams *out) {
 
 static float *float_pointer_from_params(SceneParams *out) {
     return (float *)out;
+}
+
+void scene_params_copy(SceneParams *out, const SceneParams *params) {
+    float *raw_out = float_pointer_from_params(out);
+    const float *raw_params = float_pointer_from_params(params);
+    for (int i = 0; i < number_of_scene_params; i++) {
+        raw_out[i] = raw_params[i];
+    }
 }
 
 void scene_params_elementwise_add(SceneParams *out_params, const SceneParams *a, const SceneParams *b) {
@@ -746,17 +754,17 @@ float render_get_radiance_wrapper(
     const vec3 direction,
     const float *raw_params,
     const SceneContext *ctx,
-    const float *surface_sensitivity,
     int ch
 ) {
-    float adjustment = 0.0;
-    for (long i = 0; i < number_of_scene_params; i++) {
-        adjustment += surface_sensitivity[i] * raw_params[i];
-    }
+    const SceneParams *params = params_from_float_pointer(raw_params);
+    vec3 naive_intersection;
+    ray_step(naive_intersection, origin, direction, intersection->intersection_t);
+    float sdf_at_intersection = scene_sample_sdf(naive_intersection, params, ctx);
+    float dsdfdt = directional_derivative(origin, direction, intersection->intersection_t, params, ctx);
+    float first_order_update = - sdf_at_intersection / dsdfdt;
     IntersectionResult sensitivity_adjusted;
     sensitivity_adjusted.found_intersection = intersection->found_intersection;
-    sensitivity_adjusted.intersection_t = intersection->intersection_t + adjustment;
-    const SceneParams *params = params_from_float_pointer(raw_params);
+    sensitivity_adjusted.intersection_t = intersection->intersection_t + first_order_update;
     vec3 radiance;
     get_radiance_at(radiance, &sensitivity_adjusted, origin, direction, params, ctx);
     return radiance[ch];
@@ -769,7 +777,6 @@ extern void __enzyme_autodiff_radiance(
     int, const float *,
     int, const float *, float *,
     int, const SceneContext *ctx,
-    int, const float *,
     int, int
 );
 
@@ -784,36 +791,6 @@ void render_pixel_get_radiance(
     get_radiance_at(real, &intersection, origin, direction, params, ctx);
 }
 
-float surface_sensitivity_wrapper(const vec3 origin, const vec3 direction, float t, const float *raw_params, const SceneContext *ctx) {
-    vec3 pos;
-    ray_step(pos, origin, direction, t);
-    SceneParams *params = params_from_float_pointer(raw_params);
-    return scene_sample_sdf(pos, params, ctx);
-}
-
-extern void __enzyme_autodiff_surface_sensitivity(
-    void *,
-    int, const float *,
-    int, const float *,
-    int, float, float,
-    int, const float *, float *,
-    int, const SceneContext *
-);
-
-void get_surface_sensitivity(const vec3 origin, const vec3 direction, float t, SceneParams *surface_sensitivity, const SceneParams *params, const SceneContext *ctx) {
-    const float *raw_params = float_pointer_from_params(params);
-    float *raw_surface_sensitivity = float_pointer_from_params(surface_sensitivity);
-    float dt = 1.0f;
-    __enzyme_autodiff_surface_sensitivity(
-        (void*)surface_sensitivity_wrapper,
-        enzyme_const, origin,
-        enzyme_const, direction,
-        enzyme_dup, t, dt,
-        enzyme_dup, raw_params, raw_surface_sensitivity,
-        enzyme_const, ctx
-    );
-}
-
 void render_pixel_get_gradient(
     vec3 real,
     const vec3 origin,
@@ -824,12 +801,6 @@ void render_pixel_get_gradient(
 ) {
     SearchResult critical_point;
     IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params, ctx);
-
-    SceneParams *surface_sensitivity_at_intersection = make_scene_params();
-    const float *raw_surface_sensitivity_at_intersection = float_pointer_from_params(surface_sensitivity_at_intersection);
-    if (intersection.found_intersection) {
-        get_surface_sensitivity(origin, direction, intersection.intersection_t, surface_sensitivity_at_intersection, params, ctx);
-    } // else: it will be zero, which is what we want
 
     const float *raw_params = float_pointer_from_params(params);
     for (int ch = 0; ch < 3; ch++) {
@@ -844,12 +815,10 @@ void render_pixel_get_gradient(
             enzyme_const, direction,
             enzyme_dupnoneed, raw_params, raw_fill,
             enzyme_const, ctx,
-            enzyme_const, raw_surface_sensitivity_at_intersection,
             enzyme_const, ch
         );
     }
 
-    free_scene_params(surface_sensitivity_at_intersection);
     get_radiance_at(real, &intersection, origin, direction, params, ctx);
 
     if(critical_point.found_critical_point) {
@@ -1077,44 +1046,43 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     free_pixel_renderer(renderer);
 }
 
-void finite_differences(GradientImage *gradient, long image_width, long image_height) {
+void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx) {
     const float half_epsilon = 1e-5f;
-    SceneContext *ctx = make_scene_context();
 
     PixelRenderer *renderer = make_pixel_renderer(image_width, image_height);
     #pragma omp parallel for
     for (long ir = 0; ir < image_height; ir++) {
+        SceneParams *working = make_scene_params();
         SceneParamsPerChannel ppc;
         for (int c = 0; c < 3; c++) {
             ppc.rgb[c] = make_scene_params();
         }
         for (long ic = 0; ic < image_width; ic++) {
             for (long p = 0; p < number_of_scene_params; p++) {
-                SceneParams *params = make_scene_params();
-                scene_params_fill(params, 0.0f);
-                scene_params_set(params, p, -half_epsilon);
+                float param_value = scene_parameter_get(params, p);
+                scene_params_copy(working, params);
+                scene_params_set(working, p, param_value - half_epsilon);
                 vec3 real_left;
-                project_pixel_get_radiance(real_left, renderer, ir, ic, params, ctx);
+                project_pixel_get_radiance(real_left, renderer, ir, ic, working, ctx);
                 vec3 real_right;
-                scene_params_fill(params, 0.0f);
-                scene_params_set(params, p, half_epsilon);
+                scene_params_copy(working, params);
+                scene_params_set(working, p, param_value + half_epsilon);
                 project_pixel_get_radiance(real_right, renderer, ir, ic, params, ctx);
 
                 vec3 gradient;
                 vec3_sub(gradient, real_right, real_left);
-                vec3_scale(gradient, gradient, 1.f / (2.f * (float)half_epsilon));
+                vec3_scale(gradient, gradient, 1.f / (half_epsilon));
 
                 for (int ch = 0; ch < 3; ch++) {
                     scene_params_set(ppc.rgb[ch], p, gradient[ch]);
                 }
-                free_scene_params(params);
             }
             gradient_image_set(&ppc, gradient, ir, ic);
         }
+        free_scene_params(working);
         for (int ch = 0; ch < 3; ch++) {
             free_scene_params(ppc.rgb[ch]);
         }
     }
-    free_scene_context(ctx);
     free_pixel_renderer(renderer);
 }

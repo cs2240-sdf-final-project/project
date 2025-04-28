@@ -79,6 +79,6 @@ void free_pixel_renderer(PixelRenderer *renderer);
 void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
 void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
 
-void finite_differences(GradientImage *gradient, long image_width, long image_height);
+void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx);
 
 #endif // HELLO_H
