@@ -738,7 +738,7 @@ void uniformSampleHemisphere(vec3 direction, vec3 normal){
 
 }
 // general random number with normal distribution use box muller transform
-float generate_normal_random() {
+float generate_normal_random(RandomState* random) {
     static int has_spare = 0;
     static float spare_value;
 
@@ -750,8 +750,8 @@ float generate_normal_random() {
         // Ensure u1 is never exactly 0 for log()
         do {
             // Generate two uniform random numbers in (0, 1]
-            u1 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
-            u2 = ((float)rand() + 1.0f) / ((float)RAND_MAX + 1.0f);
+            u1 = random_next_float(random);
+            u2 = random_next_float(random);
 
             // Basic Box-Muller requires log(u1), ensure u1 > 0
         } while (u1 <= 1e-9); // Avoid log(0) or very small numbers
@@ -767,7 +767,7 @@ float generate_normal_random() {
 
 
 
-void sample_points_on_plane(int num_points, const vec3 center_on_plane, float stddev, vec3 *output_points) {
+void sample_points_on_plane(int num_points, const vec3 center_on_plane, float stddev, vec3 *output_points, RandomState* random) {
     if (fabsf(center_on_plane[1] - 1.0f) > 1e-6) {
          fprintf(stderr, "Warning: Center point provided is not on the plane y=1.0\n");
          // Adjust center y to be exactly on the plane if desired, or proceed.
@@ -776,8 +776,8 @@ void sample_points_on_plane(int num_points, const vec3 center_on_plane, float st
 
     for (int i = 0; i < num_points; ++i) {
         // Generate standard normal random numbers (mean 0, stddev 1)
-        float rand_x_std = generate_normal_random();
-        float rand_z_std = generate_normal_random();
+        float rand_x_std = generate_normal_random(random);
+        float rand_z_std = generate_normal_random(random);
 
         // Scale by standard deviation and add to the center coordinates
         float point_x = center_on_plane[0] + stddev * rand_x_std;
@@ -822,16 +822,16 @@ float plane_pdf_independent_xz(const vec3 point, const vec3 center, float sigma)
 
 
 
-void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult sample,const SceneParams *params, vec3 directLighting){
+void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult sample,const SceneParams *params, vec3 directLighting, RandomState* random){
 
-    int num_samples = 10;
+    const int num_samples = 10;
     vec3 sampled_points[num_samples];
 
     vec3 center;
     vec3_set(center, 0.0f, 1.0f, 0.0f); // Center of distribution on the plane y=1.0
     float standard_deviation = 0.5f;     // Adjust spread as needed
 
-    sample_points_on_plane(num_samples, center, standard_deviation, sampled_points);
+    sample_points_on_plane(num_samples, center, standard_deviation, sampled_points,random);
 
 
     vec3 contribution;
@@ -877,37 +877,8 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
                 vec3 bsdf;
                 vec3_set(bsdf,1.0f);
 
-                if(sample.isReflected){
-
-                    vec3 incidentDir; // Vector from light source TOWARDS hit point
-                    vec3_scale(incidentDir, light_direction, -1.0f);
-                    vec3 refl_dir;
-                    vec3_reflect(refl_dir,incidentDir,hitNormal);
-
-                    vec3 viewDir; // Vector from hit point TOWARDS the viewer/camera
-                    vec3_scale(viewDir, rayDir, -1.0f);
-
-                    float cosThetaOut = fmaxf(0.0f,vec3_mul_inner(refl_dir, viewDir));
-
-
-                    // Calculate the Phong power term
-                    float phongFactor = powf(fmaxf(0.0f, cosThetaOut), sample.shininess); // Use powf from math.h (std::pow equivalent)
-                    
-                    // Calculate the normalization factor
-                    float normFactor = (sample.shininess + 2.0f) / (2.0f * M_PI); // Use M_PI from math.h
                 
-                    // Calculate the final scalar multiplier
-                    float scalarMultiplier = normFactor * phongFactor;
-                
-                    // Scale the base specular color
-                    vec3_scale(bsdf, sample.specular, scalarMultiplier);
-
-                    
-
-                }else{
-
-                    vec3_scale(bsdf,sample.diffuse, 1.0f / lm_pi);
-                }
+                vec3_scale(bsdf,sample.diffuse, 1.0f / lm_pi);
 
                 float pdf = plane_pdf_independent_xz(currentSamplePoint,center,standard_deviation);
 
@@ -932,9 +903,7 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
         }
        
 
-
-
-       
+   
     }
     vec3_scale(contribution,contribution,1.0f/num_samples);
     vec3_dup(directLighting,contribution);
@@ -943,6 +912,8 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
 }
 
 std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *random,const SceneParams *params){
+
+   
 
     std::vector<Segment> path;
 
@@ -978,16 +949,16 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
             vec3 hit_normal;
             get_normal_from(hit_normal, current_position, params);
 
-            computeDirectLighting(current_position,hit_normal,previous_direction,hit_sample,params,directLighting);
+            computeDirectLighting(current_position,hit_normal,previous_direction,hit_sample,params,directLighting,random);
 
         }
         vec3_dup(newSegment.contribution,directLighting);
+
+        //vec3_set(newSegment.contribution,0.0f);
     
 
         path.push_back(newSegment);
 
-        static thread_local std::mt19937 gen(std::random_device{}());
-        std::uniform_real_distribution<float> dis(0.0f, 1.0f);
 
         if(random_next_float(random)> pathContinuationProb){
             break;
@@ -1055,18 +1026,13 @@ void get_radiance_at(
     RandomState* random
 
 ) {
-    bool directlightOnly;
+    bool directlightOnly = true;
     bool countEmitted = true;
     vec3 spectralFilter;
     vec3_set(spectralFilter, 1.f);
     vec3 intensity;
     vec3_set(intensity, 0.f);
-    // printf("Path Start Position: (%f, %f, %f)\n",
-    //            path[0].pos[0],
-    //            path[0].pos[1],
-    //            path[0].pos[2]);
-
-
+    
     
     for(size_t i = 0; i < path.size(); i++){
 
@@ -1078,6 +1044,14 @@ void get_radiance_at(
             vec3_dup(hitDirection,path[i].dir);
             vec3 wi;
             vec3_dup(wi,path[i+1].dir);
+            vec3 direct_light;
+            vec3_dup(direct_light,path[i+1].contribution);
+            if (direct_light[0] != 0.0f || direct_light[1] != 0.0f || direct_light[2] != 0.0f) {
+                printf("Iteration %d: direct_light = (%f, %f, %f), spectralFilter = (%f, %f, %f)\n",
+                       i, direct_light[0], direct_light[1], direct_light[2],
+                       spectralFilter[0], spectralFilter[1], spectralFilter[2]);
+            }
+    
 
             
 
@@ -1096,10 +1070,25 @@ void get_radiance_at(
                 vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
             
                 vec3_add(intensity, intensity, emissive_part);
+
+                vec3 dl_part;
+                vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+                vec3_add(intensity,intensity,dl_part);
+
+            }else{
+                vec3 emissive;
+                vec3_dup(emissive, sample.emissive);
+    
+                vec3 emissive_part;
+                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+            
+                vec3_add(intensity, intensity, emissive_part);
+
             }
             countEmitted = false;
+            
 
-            //vec3_add(intensity,intensity,vec3{0.1f,0.1f,0.1f});
+        
 
             if(sample.isReflected){
                 vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
@@ -1125,12 +1114,14 @@ void get_radiance_at(
                 
 
             }
+            
              
 
         }
         if(directlightOnly){
             break;
         }
+        
         
     }
 
