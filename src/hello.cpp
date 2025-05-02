@@ -344,7 +344,7 @@ static inline void object_topwall(const vec3 pos, const SceneParams *params, Sdf
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
     vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
-   
+
 }
 // Left:
 static inline void object_leftwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
@@ -354,7 +354,7 @@ static inline void object_leftwall(const vec3 pos, const SceneParams *params, Sd
     vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->diffuse, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->specular, 0.4f);
-    sample->isReflected = true;
+    // sample->isReflected = true;
 }
 // Right:
 static inline void object_rightwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
@@ -373,7 +373,7 @@ static inline void object_bottomwall(const vec3 pos, const SceneParams *params, 
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
-    sample->isReflected = true;
+    // sample->isReflected = true;
 }
 inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *sample) {
     default_scene_sample(sample);
@@ -555,11 +555,11 @@ void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfR
     float ks = 1.0;
     vec3_dup(radiance, sample->ambient);
     for (int l = 0; l < 3; l++) {
-        vec3 lightColor; 
+        vec3 lightColor;
         vec3_dup(lightColor, lightColors[l]);
         lightColor[0] += params->object_1_color[0];
-        lightColor[1] += params->object_1_color[1]; 
-        lightColor[2] += params->object_1_color[2]; 
+        lightColor[1] += params->object_1_color[1];
+        lightColor[2] += params->object_1_color[2];
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
         light_dir[0] += params->object_1_direction[0];
@@ -567,7 +567,7 @@ void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfR
         light_dir[2] += params->object_1_direction[2];
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
 
-        
+
         vec3 bounce;
         for (int i = 0; i < 3; i++) {
             bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
@@ -689,7 +689,7 @@ void uniformSampleHemisphere(vec3 direction, vec3 normal){
 
     if(dot_product > 1.0f - epsilon){
 
-        vec3_dup(direction, wi); 
+        vec3_dup(direction, wi);
         return;
 
     }else if(dot_product < -1.0f + epsilon){
@@ -706,10 +706,10 @@ void uniformSampleHemisphere(vec3 direction, vec3 normal){
     float costheta = vec3_mul_inner(v1,n_normal);
 
     costheta = fmaxf(-1.0f, fminf(1.0f, costheta));
-  
+
     float sintheta = vec3_len(k);
 
-    
+
     vec3 first_term;
     vec3_scale(first_term, wi, costheta);
     vec3 second_term;
@@ -820,7 +820,7 @@ void test_hemisphere_sampling() {
     printf("----------------------------------------\n");
 }
 
-std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *random,const SceneParams *params){
+std::vector<Segment> getSecondaryPath(const vec3 origin, const vec3 direction,RandomState *random,const SceneParams *params){
 
     std::vector<Segment> path;
 
@@ -829,21 +829,21 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
     vec3 current_direction;
     vec3_dup(current_direction,direction);
     // IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
-    
-    // //store current ray 
+
+    // //store current ray
     // Segment newSegment;
     // vec3_dup(newSegment.pos,current_position);
     // vec3_dup(newSegment.dir,current_direction);
     // path.push_back(newSegment);
-    
 
-    while(true){ 
+
+    while(true){
 
         IntersectionResult hitPoint = trace_ray(current_position,current_direction,params);
         if(!hitPoint.found_intersection){
             return path;
         }
-        //store current ray 
+        //store current ray
         Segment newSegment;
         vec3_dup(newSegment.pos,current_position);
         vec3_dup(newSegment.dir,current_direction);
@@ -891,7 +891,7 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
         vec3_add(hit_intersection_point,hit_intersection_point,offset_position);
 
 
-        //update new ray 
+        //update new ray
         vec3_dup(current_position,hit_intersection_point);
         vec3_dup(current_direction,newDir);
 
@@ -901,13 +901,13 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
     return path;
 
 
-    
+
 }
 
 
 void get_radiance_at(
     vec3 radiance,
-    std::vector<Segment> path,
+    const std::vector<Segment> &path,
     const SceneParams *params,
     const int depth,
     RandomState* random
@@ -923,7 +923,7 @@ void get_radiance_at(
     //            path[0].pos[2]);
 
 
-    
+
     for(size_t i = 0; i < path.size(); i++){
 
         if(i != path.size() - 1){
@@ -935,7 +935,7 @@ void get_radiance_at(
             vec3 wi;
             vec3_dup(wi,path[i+1].dir);
 
-            
+
 
             SdfResult sample;
             scene_sample(hitPosition, params, &sample);
@@ -948,13 +948,13 @@ void get_radiance_at(
             //     vec3_scale(normal,normal,-1.f);
             // }
 
-           
+
             // vec3 normal_color;
             // vec3_scale(normal_color, normal, 0.5f);
             // vec3_add(normal_color, normal_color, vec3{0.5f, 0.5f, 0.5f});
             // vec3_dup(radiance, normal_color);
-            
-                        
+
+
 
             vec3 emissive;
             vec3_dup(emissive, sample.emissive);
@@ -962,9 +962,9 @@ void get_radiance_at(
 
             vec3 emissive_part;
             vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-           
-      
-            
+
+
+
             vec3_add(intensity, intensity, emissive_part);
             //vec3_add(intensity,intensity,vec3{0.1f,0.1f,0.1f});
 
@@ -977,7 +977,7 @@ void get_radiance_at(
 
             }else{
                 vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
-      
+
 
                 float pdf = 2.f * lm_pi;
                 vec3_scale(spectralFilter,spectralFilter, pdf);
@@ -989,24 +989,24 @@ void get_radiance_at(
                 vec3 brdf;
                 vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
                 vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
-                
+
 
             }
-             
 
-           
+
+
 
         }
-        
+
     }
 
     vec3_dup(radiance,intensity);
     // printf("  i=%zu: intensity (Pre-Emissive): (%f, %f, %f)\n",
     //                 intensity[0], intensity[1], intensity[2]);
-   
-    
-    
-    
+
+
+
+
 }
 
 
@@ -1087,7 +1087,7 @@ void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, 
 
 void render_get_radiance_wrapper(
     vec3 radiance,
-    std::vector<Segment> path,
+    const std::vector<Segment> &path,
     const float *raw_params,
     RandomState* random
 ) {
@@ -1099,9 +1099,7 @@ void render_get_radiance_wrapper(
 extern void __enzyme_fwddiff_radiance(
     void *,
     int, float *, float *,
-    int, const IntersectionResult *,
-    int, const float *,
-    int, const float *,
+    int, const std::vector<Segment> &,
     int, const float *, const float *,
     int, RandomState *
 );
@@ -1118,6 +1116,8 @@ void render_pixel(
     SearchResult critical_point;
     IntersectionResult intersection = trace_ray_get_critical_point(&critical_point, origin, direction, params);
 
+    std::vector<Segment> path = getSecondaryPath(origin , direction, random, params);
+
     for (int p = 0; p < number_of_scene_params; p++) {
         vec3 radiance;
         vec3_set(radiance, 1.f);
@@ -1129,44 +1129,36 @@ void render_pixel(
         scene_params_set(dummy_params, p, 1.f);
         const float *raw_dummy_params = float_pointer_from_params(dummy_params);
 
-        // __enzyme_fwddiff_radiance(
-        //     (void*)render_get_radiance_wrapper,
-        //     enzyme_dup, radiance, d_radiance,
-        //     enzyme_const, &intersection,
-        //     enzyme_const, origin,
-        //     enzyme_const, direction,
-        //     enzyme_dup, raw_params, raw_dummy_params,
-        //     enzyme_const, random
-        // );
+        __enzyme_fwddiff_radiance(
+            (void*)render_get_radiance_wrapper,
+            enzyme_dup, radiance, d_radiance,
+            enzyme_const, path,
+            enzyme_dup, raw_params, raw_dummy_params,
+            enzyme_const, random
+        );
 
         for (int ch = 0; ch < 3; ch++) {
             scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
         }
     }
-    vec3 o;
-    vec3_dup(o,origin);
-    vec3 d;
-    vec3_dup(d,direction);
 
-    std::vector<Segment> path = getSecondaryPath(o , d ,random,params);
+    get_radiance_at(real, path, params, depth, random);
 
-    get_radiance_at(real, path, params,depth,random);
-
-    // if(critical_point.found_critical_point) {
-    //     vec3 y_star;
-    //     ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
-    //     SdfResult sample;
-    //     scene_sample(y_star, params, &sample);
-    //     vec3 normal;
-    //     get_normal_from(normal, y_star, params);
-    //     vec3 y_star_radiance;
-    //     phongLight(y_star_radiance, direction, normal, &sample,params);
-    //     diff_sdf(y_star, dummy_params, params);
-    //     vec3 deltaL;
-    //     vec3_sub(deltaL, y_star_radiance, real);
-    //     vec3_scale(deltaL, deltaL, 1 / distance_threshold);
-    //     outer_product_add_assign(params_per_channel, dummy_params, deltaL);
-    // }
+    if(critical_point.found_critical_point) {
+        vec3 y_star;
+        ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
+        SdfResult sample;
+        scene_sample(y_star, params, &sample);
+        vec3 normal;
+        get_normal_from(normal, y_star, params);
+        vec3 y_star_radiance;
+        phongLight(y_star_radiance, direction, normal, &sample,params);
+        diff_sdf(y_star, dummy_params, params);
+        vec3 deltaL;
+        vec3_sub(deltaL, y_star_radiance, real);
+        vec3_scale(deltaL, deltaL, 1 / distance_threshold);
+        outer_product_add_assign(params_per_channel, dummy_params, deltaL);
+    }
     free_scene_params(dummy_params);
 }
 
@@ -1177,8 +1169,8 @@ void render_pixel_wrapper(
     SceneParamsPerChannel *params_per_channel,
     const SceneParams *params,
     RandomState* random
-) { 
-    
+) {
+
     for(int i = 0; i < numberOfSampling; i++){
         vec3 temp_real;
         render_pixel(temp_real, origin,direction,params_per_channel,params,random);
@@ -1322,16 +1314,8 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
 
-    // SceneParamsPerChannel ppc;
-    // for (int c = 0; c < 3; c++) {
-    //     ppc.rgb[c] = make_scene_params();
-    // }
-    #pragma omp parallel for 
-
+    #pragma omp parallel for
     for (long ir = 0; ir < real->image_height; ir++) {
-        // if (ir % 50 == 0) {
-        //     printf("on row %ld\n", ir);
-        // }
         SceneParamsPerChannel ppc;
         for (int c = 0; c < 3; c++) {
             ppc.rgb[c] = make_scene_params();
@@ -1355,8 +1339,7 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
 
             // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            //render_pixel(out_real, camera_position, direction, &ppc, params,random);
-            render_pixel_wrapper(out_real, camera_position, direction, &ppc, params,random);
+            render_pixel(out_real, camera_position, direction, &ppc, params, random);
 
             image_set(real, ir, ic, out_real);
             gradient_image_set(&ppc, gradient, ir, ic);
@@ -1365,10 +1348,4 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
         free_scene_params(ppc.rgb[c]);
         }
     }
-
-    // for (int c = 0; c < 3; c++) {
-    //     free_scene_params(ppc.rgb[c]);
-    // }
-
-    //test_hemisphere_sampling();
 }
