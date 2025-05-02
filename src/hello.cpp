@@ -36,7 +36,7 @@ const float lm_pi = 3.14159265358979323846f;
 
 const float pathContinuationProb = 0.9f;
 
-const int numberOfSampling = 10;
+const int numberOfSampling = 1000;
 
 typedef struct{
     vec3 pos;
@@ -226,6 +226,25 @@ void scene_params_elementwise_mul(SceneParams *out_params, const SceneParams *a,
     const float *raw_b = float_pointer_from_params(b);
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_out_params[i] = raw_a[i] * raw_b[i];
+    }
+}
+
+void params_per_channel_set(SceneParamsPerChannel *ppc, float value) {
+    for (int c = 0; c < 3; c++) {
+        float *pc = float_pointer_from_params(ppc->rgb[c]);
+        for (int i = 0; i < number_of_scene_params; i++) {
+            pc[i] = value;
+        }
+    }
+}
+
+void params_per_channel_add_assign(SceneParamsPerChannel *ppc, const SceneParamsPerChannel *to_add) {
+    for (int c = 0; c < 3; c++) {
+        float *apc = float_pointer_from_params(ppc->rgb[c]);
+        const float *bpc = float_pointer_from_params(to_add->rgb[c]);
+        for (int i = 0; i < number_of_scene_params; i++) {
+            apc[i] += bpc[i];
+        }
     }
 }
 
@@ -1170,14 +1189,22 @@ void render_pixel_wrapper(
     const SceneParams *params,
     RandomState* random
 ) {
-
+    SceneParamsPerChannel working;
+    for (int c = 0; c < 3; c++) {
+        working.rgb[c] = make_scene_params();
+    }
+    vec3_set(real, 0.0);
+    params_per_channel_set(params_per_channel, 0.0);
     for(int i = 0; i < numberOfSampling; i++){
         vec3 temp_real;
-        render_pixel(temp_real, origin,direction,params_per_channel,params,random);
+        render_pixel(temp_real, origin,direction, &working, params, random);
         vec3_add(real,real, temp_real);
+        params_per_channel_add_assign(params_per_channel, &working);
     }
     vec3_scale(real,real, 1.f/numberOfSampling);
-
+    for (int c = 0; c < 3; c++) {
+        free_scene_params(working.rgb[c]);
+    }
 }
 
 
@@ -1339,13 +1366,13 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
 
             // Calculate radiance and gradients for a single pixel
             vec3 out_real;
-            render_pixel(out_real, camera_position, direction, &ppc, params, random);
+            render_pixel_wrapper(out_real, camera_position, direction, &ppc, params, random);
 
             image_set(real, ir, ic, out_real);
             gradient_image_set(&ppc, gradient, ir, ic);
         }
         for (int c = 0; c < 3; c++) {
-        free_scene_params(ppc.rgb[c]);
+            free_scene_params(ppc.rgb[c]);
         }
     }
 }
