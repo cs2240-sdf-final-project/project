@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <inttypes.h>
+#include <functional>
 
 #include "hello.h"
 
@@ -21,11 +22,13 @@ int enzyme_const;
 // sign changes in the directional derivatives
 const float max_step_size = 1.0f;
 // take this many steps to balance performance with exploring the entire scene
-const int number_of_steps = 1'000;
+const int number_of_steps = 1'00;
 // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
 const float contact_threshold = 1e-4f;
 // width of the scene band
 const float distance_threshold = 1e-2f;
+// finite differences half epsilon
+const float finite_difference_epsilon = 1e-5f;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -94,36 +97,97 @@ void vec2_abs(vec2 out, const vec2 in) {
     }
 }
 
+long lclamp(long x, long min, long max) {
+    if (x > max) {
+        return max;
+    }
+    if (x < min) {
+        return min;
+    }
+    return x;
+}
+
+// maps 0..=dim-1 points to -1.0..=1.0
+inline void translate_grid(vec3 out, const long point[3], const long dim[3]) {
+    for (int i = 0; i < 3; i++) {
+        out[i] = lerp((float)point[i], 0.0, (float)(dim[i] -1), -1.0, 1.0);
+    }
+}
+
+// maps 0..=dim-1 points to -1.0..=1.0
+inline void inv_translate_grid(long out[3], const float point[3], const long dim[3]) {
+    for (int i = 0; i < 3; i++) {
+        out[i] = (long)floorf(lerp(point[i], -1.0, 1.0, 0.0, (float)(dim[i] -1)));
+    }
+}
+
+inline void sample_existing_sdf(
+    const long strides[3],
+    const long dim[3],
+    float *sds,
+    std::function<float(const vec3 pos)> sampler
+) {
+    for (long x0 = 0; x0 < dim[0]; x0++) {
+        for (long x1 = 0; x1 < dim[1]; x1++) {
+            for (long x2 = 0; x2 < dim[2]; x2++) {
+                long x[3] = {x0, x1, x2};
+                vec3 fx;
+                translate_grid(fx, x, dim);
+                long i = x0 * strides[0] + x1 * strides[1] + x2 * strides[2];
+                assert(i >= 0 && i < dim[0] * dim[1] * dim[2]);
+                sds[i] = sampler(fx);
+            }
+        }
+    }
+}
+
 inline float sdfGrid(
     const vec3 pos,
     const long strides[3],
     const long dim[3],
     const float *sds
 ) {
-    const float sigma = 0.1f;
-    float accum = 0.0;
-    for (long x0 = 0; x0 < dim[0]; x0++) {
-        float fx0 = (float)x0 / (float)dim[0];
-        for (long x1 = 0; x1 < dim[1]; x1++) {
-            float fx1 = (float)x1 / (float)dim[1];
-            for (long x2 = 0; x2 < dim[2]; x2++) {
-                float fx2 = (float)x2 / (float)dim[2];
-                vec3 fx = {fx0, fx1, fx2};
+    // calculate floor grid point
+
+    // return vec3_len(pos) - 0.2;
+    long ipos[3];
+    inv_translate_grid(ipos, pos, dim);
+    float weighted_sum = 0.0;
+    float total_weights = 0.0;
+    for (long dix = 0; dix < 2; dix++) {
+        for (long diy = 0; diy < 2; diy++) {
+            for (long diz = 0; diz < 2; diz++) {
+                long corner[3];
+                long di[3] = {dix, diy, diz};
+                for (long d = 0; d < 3; d++) {
+                    corner[d] = lclamp(ipos[d] + di[d], 0, dim[d]-1);
+                }
+                vec3 fcorner;
+                translate_grid(fcorner, corner, dim);
                 vec3 displacement;
-                vec3_sub(displacement, pos, fx);
-                float distance = vec3_len(displacement);
-                float numer = expf(-distance * distance * (1.f / (2.f * sigma * sigma)));
-                float denom = sqrtf(2.f * (float)M_PI * sigma * sigma);
-                float weight = numer / denom;
-                long i = x0 * strides[0] + x1 * strides[1] + x2 * strides[2];
-                accum += weight * sds[i];
+                vec3_sub(displacement, pos, fcorner);
+                // the sum of 1- the projected distance along each axis
+                float weight = 1.0;
+                for (long d = 0; d < 3; d++) {
+                    weight *= 1.0f - fabsf(pos[d] - (float)corner[d]);
+                }
+                // printf("%g %g %g %g\n", fcorner[0], fcorner[1], fcorner[2], weight);
+                long index = 0;
+                for (long d = 0; d < 3; d++) {
+                    index += strides[d] * corner[d];
+                }
+                assert(index >= 0 && index < dim[0] * dim[1] * dim[2]);
+                float distance = sds[index] + vec3_len(displacement);
+                // printf("%g %g %g %g %g\n", sds[index], fcorner[0], fcorner[1], fcorner[2], vec3_len(displacement));
+                weighted_sum += distance * weight;
+                total_weights += weight;
             }
         }
     }
-    return accum;
+    return weighted_sum / total_weights;
 }
 
-float sdfCylinder(const vec3 pos,float radius, float height) {
+inline float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
     xz[0] = pos[0];
     xz[1] = pos[2];
@@ -147,12 +211,12 @@ float sdfCylinder(const vec3 pos,float radius, float height) {
     return dist;
 }
 
-float sdfPlane(const vec3 pos, const vec3 normal, float height) {
+inline float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     float dist = vec3_mul_inner(pos, normal) + height;
     return dist;
 }
 
-float sdfTriPrism(const vec3 origin, float h0, float h1) {
+inline float sdfTriPrism(const vec3 origin, float h0, float h1) {
     //h[0] represents half the length of the base of the triangular prism
     //h[1] represents half the height of the prism along the z-axis
     vec3 pos;
@@ -163,7 +227,7 @@ float sdfTriPrism(const vec3 origin, float h0, float h1) {
     return dist;
 }
 
-float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
+inline float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
     vec3 pos;
     vec3_dup(pos, origin);
     pos[1] -= clamp(pos[1], 0.0f, height);
@@ -171,13 +235,8 @@ float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
     return vec3_len(pos) - radius;
 }
 
-float sdfSphere(const vec3 pos) {
-    vec3 origin;
-    vec3_set(origin, 0.0);
-    vec3 displacement;
-    vec3_sub(displacement, pos, origin);
-
-    return vec3_len(displacement) - 3.5f;
+inline float sdfSphere(const vec3 pos, float radius) {
+    return vec3_len(pos) - radius;
 }
 
 struct SceneContext {
@@ -193,10 +252,15 @@ void free_scene_context(SceneContext *ctx) {
     delete ctx;
 }
 
+const long basic_grid_dim = 10;
+const long grid_dim[3] = {basic_grid_dim, basic_grid_dim, basic_grid_dim};
+const long grid_strides[3] = {basic_grid_dim * basic_grid_dim, basic_grid_dim, 1};
+
 struct SceneParams {
     float object_3_pos[3];
     float color[3];
     float h1, h2;
+    float grid[basic_grid_dim][basic_grid_dim][basic_grid_dim];
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -233,6 +297,10 @@ void scene_params_init(SceneParams *params, const SceneContext *ctx) {
     for (int i = 0; i < number_of_scene_params; i++) {
         raw_params[i] = 0.f;
     }
+    sample_existing_sdf(grid_strides, grid_dim, &params->grid[0][0][0], [&](const vec3 pos) {
+        float ret = sdfSphere(pos, 0.9f);
+        return ret;
+    });
 }
 
 float scene_consistency_loss(const SceneParams *params) {
@@ -306,166 +374,243 @@ void scene_params_set(SceneParams *params, long p, float value) {
 }
 
 typedef struct {
-    float distance;
     float ambient[3];
     float diffuse[3];
     float specular[3];
+    float normal[3];
     float shininess;
 } SdfResult;
 
 static inline void default_scene_sample(SdfResult *s) {
-    s->distance = INFINITY;
     vec3_set(s->ambient, 0.0);
     vec3_set(s->diffuse, 0.0);
     vec3_set(s->specular, 0.0);
+    vec3_set(s->normal, 1.0);
     s->shininess = 1.0;
 }
 
-/** writes the output in the first paramemter */
-static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
-    if (destination->distance < b->distance) {
-        return; // nothing to be done
-    }
-    destination->distance = b->distance;
-    vec3_dup(destination->ambient, b->ambient);
-    vec3_dup(destination->diffuse, b->diffuse);
-    vec3_dup(destination->specular, b->specular);
-    destination->shininess = b->shininess;
-}
-
-static inline void object_cylinder(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline float object_cylinder_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
     (void)ctx;
     vec3 world = {0.6f, 0.2f, -0.2f};
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfCylinder(local, 0.3f , 0.8f );
+    return sdfCylinder(local, 0.3f, 0.8f);
+}
+static inline void object_cylinder_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    default_scene_sample(sample);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
-static inline void object_capsule(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+
+static inline float object_capsule_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)ctx;
     vec3 world = {-0.4f, 0.3f, 0.5f};
     vec3_add(world, world, params->object_3_pos);
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
+    return sdfVerticalCapsule(local, 0.3f, 0.5f);
+}
+static inline void object_capsule_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    default_scene_sample(sample);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
+
 // Back:
-static inline void object_backwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline float object_backwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
     (void)ctx;
     vec3 plane_normal = {0.0, 0.0, 1.0};
-    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    return sdfPlane(pos, plane_normal, 1.0f);
+}
+static inline void object_backwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    default_scene_sample(sample);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
+
 // Ceiling:
-static inline void object_topwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline float object_topwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
     (void)ctx;
     vec3 plane_normal = {0.0, 1.0, 0.0};
-    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    return sdfPlane(pos, plane_normal, 1.0f);
+}
+static inline void object_topwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    default_scene_sample(sample);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
+
 // Left:
-static inline void object_leftwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline float object_leftwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
     (void)ctx;
     vec3 plane_normal = {1.0, 0.0, 0.0};
-    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    return sdfPlane(pos, plane_normal, 1.0f);
+}
+static inline void object_leftwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    default_scene_sample(sample);
     vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->diffuse, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->specular, 0.4f);
 }
+
 // Right:
-static inline void object_rightwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline float object_rightwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
     (void)ctx;
     vec3 plane_normal = {-1.0, 0.0, 0.0};
-    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    return sdfPlane(pos, plane_normal, 1.0f);
+}
+static inline void object_rightwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    default_scene_sample(sample);
     vec3_set(sample->ambient, 0.14f, 0.45f, 0.091f);
     vec3_set(sample->diffuse, 0.14f, 0.45f, 0.091f);
     vec3_set(sample->specular, 0.4f);
 }
+
 // Floor:
-static inline void object_bottomwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline float object_bottomwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    (void)pos;
     (void)params;
     (void)ctx;
     vec3 plane_normal = {0.0, -1.0, 0.0};
-    sample->distance = sdfPlane(pos, plane_normal, 1.0f);
+    return sdfPlane(pos, plane_normal, 1.0f);
+}
+static inline void object_bottomwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    default_scene_sample(sample);
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
 
-inline __attribute__((always_inline)) void
-scene_sample(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+// Grid
+static inline float object_grid_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    (void)ctx;
+    return sdfGrid(pos, grid_strides, grid_dim, &params->grid[0][0][0]);
+}
+static inline void object_grid_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
     default_scene_sample(sample);
+    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->specular, 0.4f);
+}
+
+extern float __enzyme_autodiff_normal(void *, int, const float *, float *, int, const SceneParams *, int, const SceneContext *ctx);
+
+#define SCENE\
+    OBJ(object_grid_sd,object_grid_mat,__enzyme_autodiff_normal(\
+        (void*)object_grid_sd,enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_cylinder_sd,  object_cylinder_mat,  __enzyme_autodiff_normal(\
+        (void*)object_cylinder_sd,  enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_capsule_sd,   object_capsule_mat,   __enzyme_autodiff_normal(\
+        (void*)object_capsule_sd,   enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_backwall_sd,  object_backwall_mat,  __enzyme_autodiff_normal(\
+        (void*)object_backwall_sd,  enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_topwall_sd,   object_topwall_mat,   __enzyme_autodiff_normal(\
+        (void*)object_topwall_sd,   enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_leftwall_sd,  object_leftwall_mat,  __enzyme_autodiff_normal(\
+        (void*)object_leftwall_sd,  enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_rightwall_sd, object_rightwall_mat, __enzyme_autodiff_normal(\
+        (void*)object_rightwall_sd, enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_bottomwall_sd,object_bottomwall_mat,__enzyme_autodiff_normal(\
+        (void*)object_bottomwall_sd,enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))
+
+inline float scene_sample_sdf(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    float ret = INFINITY;
+    #define OBJ(sd, mat, norm) do { ret = fminf(ret, sd(pos, params, ctx)); } while (0);
+    SCENE
+    #undef OBJ
+    return ret;
+}
+
+inline float get_normal_from(vec3 out_normal, const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    float ret = INFINITY;
+    #define OBJ(sd, mat, norm) do {\
+        vec3 normal; \
+        vec3_set(normal, 0.0); \
+        float distance = sd(pos, params, ctx);\
+        norm;\
+        if (distance < ret) { \
+            vec3_dup(out_normal, normal); \
+            ret = distance;\
+        } \
+    } while (0);
+    SCENE
+    #undef OBJ
+    return ret;
+}
+
+/** writes the output in the first paramemter */
+static inline float compose_scene_sample(SdfResult *a, const SdfResult *b, float distance_a, float distance_b) {
+    if (distance_a < distance_b) {
+        return distance_a; // nothing to be done
+    }
+    vec3_dup(a->ambient, b->ambient);
+    vec3_dup(a->diffuse, b->diffuse);
+    vec3_dup(a->specular, b->specular);
+    vec3_dup(a->normal, b->normal);
+    a->shininess = b->shininess;
+    return distance_b;
+}
+
+inline void scene_sample(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *res) {
     SdfResult working;
     default_scene_sample(&working);
-    object_cylinder(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
-    default_scene_sample(&working);
-    object_capsule(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
-    default_scene_sample(&working);
-    object_backwall(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
-    default_scene_sample(&working);
-    object_topwall(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
-    default_scene_sample(&working);
-    object_leftwall(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
-    default_scene_sample(&working);
-    object_rightwall(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
-    default_scene_sample(&working);
-    object_bottomwall(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
+    float res_distance = INFINITY;
+    #define OBJ(sd, mat, norm) do { \
+        float distance_a = sd(pos, params, ctx);\
+        mat(pos, params, ctx, &working); \
+        res_distance = compose_scene_sample(res, &working, res_distance, distance_a); \
+    } while(0);
+    SCENE
+    #undef OBJ
 }
 
-/** specialization of scene_sample that just returns the value of the sdf */
-float scene_sample_sdf(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
-    SdfResult sample;
-    scene_sample(pos, params, ctx, &sample);
-    return sample.distance;
-}
-
-float directional_derivative_inner(const vec3 origin, const vec3 direction, float t, const SceneParams *params, const SceneContext *ctx) {
-    vec3 scaled;
-    vec3_scale(scaled, direction, t);
-    vec3 added;
-    vec3_add(added, origin, scaled);
-    return scene_sample_sdf(added, params, ctx);
-}
-
-extern float __enzyme_fwddiff_directional(void *,
-    int, const float *,
-    int, const float *,
-    int, float, float,
-    int, const SceneParams *,
-    int, const SceneContext *
-);
-
-float directional_derivative(const vec3 pos, const vec3 direction, float t, const SceneParams *params, const SceneContext *ctx) {
-    float dt = 1.0f;
-    return __enzyme_fwddiff_directional(
-        (void *)directional_derivative_inner,
-        enzyme_const, pos,
-        enzyme_const, direction,
-        enzyme_dup, t, dt,
-        enzyme_const, params,
-        enzyme_const, ctx
-    );
+inline float directional_derivative(const vec3 origin, const vec3 direction, float t, const SceneParams *params, const SceneContext *ctx) {
+    vec3 sample_point;
+    ray_step(sample_point, origin, direction, t);
+    vec3 normal;
+    get_normal_from(normal, sample_point, params, ctx);
+    return vec3_mul_inner(direction, normal);
 }
 
 typedef struct {
@@ -538,26 +683,6 @@ void search_for_critical_point(const vec3 origin, const vec3 direction, const Sc
     }
     ret->found_critical_point = true;
     ret->t_if_found_critical_point = best_t;
-}
-
-float sdf_normal_wrapper(const vec3 pos, const float *params, const SceneContext *ctx) {
-    SceneParams* scene_params = params_from_float_pointer(params);
-    return scene_sample_sdf(pos, scene_params, ctx);
-}
-
-extern void __enzyme_autodiff_normal(void *, int, const float *, float *, int, const float *, int, const SceneContext *ctx);
-
-void get_normal_from(vec3 normal, const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
-    vec3 dpos;
-    vec3_set(dpos, 0.0f);
-    const float *raw_params = float_pointer_from_params(params);
-    __enzyme_autodiff_normal(
-        (void*)sdf_normal_wrapper,
-        enzyme_dup, pos, dpos,
-        enzyme_const, raw_params,
-        enzyme_const, ctx
-    );
-    vec3_dup(normal, dpos);
 }
 
 float sdf_theta_wrapper(const vec3 pos, const float *params, const SceneContext *ctx) {
@@ -697,8 +822,12 @@ inline static void get_radiance_at(
 GradientImage make_gradient_image(long image_width, long image_height) {
     const long num_subpixels = 3;
     long num_floats = number_of_scene_params * image_width * image_height * num_subpixels;
-    float *buf = (float *)calloc(sizeof(float), (size_t)num_floats);
+    assert(num_floats > 0);
+    float *buf = new float[(size_t)num_floats];
     assert(buf);
+    for (long i = 0; i < num_floats; i++) {
+        buf[i] = 0.f;
+    }
     GradientStrides strides;
     strides.parameter_stride = 1;
     strides.subpixel_stride = number_of_scene_params;
@@ -751,7 +880,7 @@ void gradient_image_slice(Image *image, const GradientImage *gradient, long para
 }
 
 void free_gradient_image(GradientImage *image) {
-    free(image->buf);
+    delete[] image->buf;
 }
 
 static inline long gradient_image_get_index(const GradientStrides *s, long r, long c, long subpixel, long param) {
@@ -1061,6 +1190,14 @@ void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, lon
 
 void render_image(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx) {
     PixelRenderer *renderer = make_pixel_renderer(real->image_width, real->image_height);
+    // float a = sdfGrid(
+    //     vec3{0.0, 0.0, 0.0},
+    //     grid_strides,
+    //     grid_dim,
+    //     &params->grid[0][0][0]
+    // );
+    // printf("%g\n", a);
+    // return;
     #pragma omp parallel for
     for (long ir = 0; ir < real->image_height; ir++) {
         SceneParamsPerChannel ppc;
@@ -1069,9 +1206,10 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
         }
         for (long ic = 0; ic < real->image_width; ic++) {
             vec3 out_real;
-            project_pixel_get_gradient(out_real, &ppc, renderer, ir, ic, params, ctx);
+            project_pixel_get_radiance(out_real, renderer, ir, ic, params, ctx);
+            // project_pixel_get_gradient(out_real, &ppc, renderer, ir, ic, params, ctx);
             image_set(real, ir, ic, out_real);
-            gradient_image_set(&ppc, gradient, ir, ic);
+            // gradient_image_set(&ppc, gradient, ir, ic);
         }
         for (int c = 0; c < 3; c++) {
             free_scene_params(ppc.rgb[c]);
@@ -1081,8 +1219,6 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
 }
 
 void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx) {
-    const float half_epsilon = 1e-5f;
-
     PixelRenderer *renderer = make_pixel_renderer(image_width, image_height);
     #pragma omp parallel for
     for (long ir = 0; ir < image_height; ir++) {
@@ -1095,17 +1231,17 @@ void finite_differences(GradientImage *gradient, long image_width, long image_he
             for (long p = 0; p < number_of_scene_params; p++) {
                 float param_value = scene_parameter_get(params, p);
                 scene_params_copy(working, params);
-                scene_params_set(working, p, param_value - half_epsilon);
+                scene_params_set(working, p, param_value - finite_difference_epsilon);
                 vec3 real_left;
                 project_pixel_get_radiance(real_left, renderer, ir, ic, working, ctx);
                 vec3 real_right;
                 scene_params_copy(working, params);
-                scene_params_set(working, p, param_value + half_epsilon);
+                scene_params_set(working, p, param_value + finite_difference_epsilon);
                 project_pixel_get_radiance(real_right, renderer, ir, ic, params, ctx);
 
                 vec3 gradient;
                 vec3_sub(gradient, real_right, real_left);
-                vec3_scale(gradient, gradient, 1.f / (half_epsilon));
+                vec3_scale(gradient, gradient, 1.f / (finite_difference_epsilon));
 
                 for (int ch = 0; ch < 3; ch++) {
                     scene_params_set(ppc.rgb[ch], p, gradient[ch]);
