@@ -75,6 +75,12 @@ float lerp(float x, float in_min, float in_max, float out_min, float out_max) {
     return out_min + (x - in_min) * (out_max - out_min) / (in_max - in_min);
 }
 
+float vec3_distance(const vec3 a, const vec3 b) {
+    vec3 displacement;
+    vec3_sub(displacement, b, a);
+    return vec3_len(displacement);
+}
+
 void vec3_set(vec3 out, float value) {
     vec3 to_set = { value, value, value };
     vec3_dup(out, to_set);
@@ -108,20 +114,20 @@ long lclamp(long x, long min, long max) {
 }
 
 // maps 0..=dim-1 points to -1.0..=1.0
-inline void translate_grid(vec3 out, const long point[3], const long dim[3]) {
+static inline void translate_grid(vec3 out, const long point[3], const long dim[3]) {
     for (int i = 0; i < 3; i++) {
         out[i] = lerp((float)point[i], 0.0, (float)(dim[i] -1), -1.0, 1.0);
     }
 }
 
 // maps 0..=dim-1 points to -1.0..=1.0
-inline void inv_translate_grid(long out[3], const float point[3], const long dim[3]) {
+static inline void inv_translate_grid(float out[3], const float point[3], const long dim[3]) {
     for (int i = 0; i < 3; i++) {
-        out[i] = (long)floorf(lerp(point[i], -1.0, 1.0, 0.0, (float)(dim[i] -1)));
+        out[i] = lerp(point[i], -1.0, 1.0, 0.0, (float)(dim[i] -1));
     }
 }
 
-inline void sample_existing_sdf(
+static inline void sample_existing_sdf(
     const long strides[3],
     const long dim[3],
     float *sds,
@@ -141,44 +147,37 @@ inline void sample_existing_sdf(
     }
 }
 
-inline float sdfGrid(
+static inline float sdfGrid(
     const vec3 pos,
     const long strides[3],
     const long dim[3],
     const float *sds
 ) {
     // calculate floor grid point
-
-    // return vec3_len(pos) - 0.2;
-    long ipos[3];
-    inv_translate_grid(ipos, pos, dim);
+    float pos_in_grid[3];
+    inv_translate_grid(pos_in_grid, pos, dim);
+    long top_left_grid[3];
+    for (long d = 0; d < 3; d++) {
+        top_left_grid[d] = static_cast<long>(pos_in_grid[d]);
+    }
     float weighted_sum = 0.0;
     float total_weights = 0.0;
     for (long dix = 0; dix < 2; dix++) {
         for (long diy = 0; diy < 2; diy++) {
             for (long diz = 0; diz < 2; diz++) {
-                long corner[3];
                 long di[3] = {dix, diy, diz};
+                float weight = 1.0f;
                 for (long d = 0; d < 3; d++) {
-                    corner[d] = lclamp(ipos[d] + di[d], 0, dim[d]-1);
+                    float w = pos_in_grid[d] - (float)top_left_grid[d];
+                    weight *= di[d] == 0 ? 1.0f - w : w;
                 }
-                vec3 fcorner;
-                translate_grid(fcorner, corner, dim);
-                vec3 displacement;
-                vec3_sub(displacement, pos, fcorner);
-                // the sum of 1- the projected distance along each axis
-                float weight = 1.0;
-                for (long d = 0; d < 3; d++) {
-                    weight *= 1.0f - fabsf(pos[d] - (float)corner[d]);
-                }
-                // printf("%g %g %g %g\n", fcorner[0], fcorner[1], fcorner[2], weight);
                 long index = 0;
                 for (long d = 0; d < 3; d++) {
-                    index += strides[d] * corner[d];
+                    long coord = lclamp(top_left_grid[d] + di[d], 0, dim[d] - 1);
+                    index += coord * strides[d];
                 }
                 assert(index >= 0 && index < dim[0] * dim[1] * dim[2]);
-                float distance = sds[index] + vec3_len(displacement);
-                // printf("%g %g %g %g %g\n", sds[index], fcorner[0], fcorner[1], fcorner[2], vec3_len(displacement));
+                float distance = sds[index];
                 weighted_sum += distance * weight;
                 total_weights += weight;
             }
@@ -187,7 +186,7 @@ inline float sdfGrid(
     return weighted_sum / total_weights;
 }
 
-inline float sdfCylinder(const vec3 pos,float radius, float height) {
+static inline float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
     xz[0] = pos[0];
     xz[1] = pos[2];
@@ -211,23 +210,23 @@ inline float sdfCylinder(const vec3 pos,float radius, float height) {
     return dist;
 }
 
-inline float sdfPlane(const vec3 pos, const vec3 normal, float height) {
+static inline float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     float dist = vec3_mul_inner(pos, normal) + height;
     return dist;
 }
 
-inline float sdfTriPrism(const vec3 origin, float h0, float h1) {
-    //h[0] represents half the length of the base of the triangular prism
-    //h[1] represents half the height of the prism along the z-axis
-    vec3 pos;
-    vec3_dup(pos, origin);
+// static inline float sdfTriPrism(const vec3 origin, float h0, float h1) {
+//     //h[0] represents half the length of the base of the triangular prism
+//     //h[1] represents half the height of the prism along the z-axis
+//     vec3 pos;
+//     vec3_dup(pos, origin);
 
-    vec3 q = {fabsf(pos[0]), fabsf(pos[1]), fabsf(pos[2])};
-    float dist = fmaxf(q[2] - h1, fmaxf(q[0] * 0.866025f + pos[1] * 0.5f, -pos[1]) - h0 * 0.5f);
-    return dist;
-}
+//     vec3 q = {fabsf(pos[0]), fabsf(pos[1]), fabsf(pos[2])};
+//     float dist = fmaxf(q[2] - h1, fmaxf(q[0] * 0.866025f + pos[1] * 0.5f, -pos[1]) - h0 * 0.5f);
+//     return dist;
+// }
 
-inline float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
+static inline float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
     vec3 pos;
     vec3_dup(pos, origin);
     pos[1] -= clamp(pos[1], 0.0f, height);
@@ -235,7 +234,7 @@ inline float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
     return vec3_len(pos) - radius;
 }
 
-inline float sdfSphere(const vec3 pos, float radius) {
+static inline float sdfSphere(const vec3 pos, float radius) {
     return vec3_len(pos) - radius;
 }
 
@@ -377,7 +376,6 @@ typedef struct {
     float ambient[3];
     float diffuse[3];
     float specular[3];
-    float normal[3];
     float shininess;
 } SdfResult;
 
@@ -385,7 +383,6 @@ static inline void default_scene_sample(SdfResult *s) {
     vec3_set(s->ambient, 0.0);
     vec3_set(s->diffuse, 0.0);
     vec3_set(s->specular, 0.0);
-    vec3_set(s->normal, 1.0);
     s->shininess = 1.0;
 }
 
@@ -587,7 +584,6 @@ static inline float compose_scene_sample(SdfResult *a, const SdfResult *b, float
     vec3_dup(a->ambient, b->ambient);
     vec3_dup(a->diffuse, b->diffuse);
     vec3_dup(a->specular, b->specular);
-    vec3_dup(a->normal, b->normal);
     a->shininess = b->shininess;
     return distance_b;
 }
