@@ -186,6 +186,79 @@ static inline float sdfGrid(
     return weighted_sum / total_weights;
 }
 
+static inline void normalGrid(
+    vec3 normal_out,
+    const long pos[3],
+    const long strides[3],
+    const long dim[3],
+    const float *sds
+) {
+    long center_index = 0;
+    for (long d = 0; d < 3; d++) {
+        assert(pos[d] >= 0 && pos[d] < dim[d]);
+        center_index += pos[d] * strides[d];
+    }
+    float center_value = sds[center_index];
+    for (long axis = 0; axis < 3; axis++) {
+        float normal_sum = 0.0;
+        float normal_count = 0.0;
+        // visit dd = -1, dd = 1
+        for (long dd = -1; dd <= 1; dd += 2) {
+            if (pos[axis] + dd < 0 || pos[axis] + dd >= dim[axis]) {
+                continue;
+            }
+            long sample_index = center_index + dd * strides[axis];
+            float sample_value = sds[sample_index];
+            float diff = sample_value - center_value;
+            normal_sum += diff * static_cast<float>(dd);
+            normal_count += 1.0f;
+        }
+        normal_out[axis] = normal_sum / normal_count;
+    }
+}
+
+static inline float grid_consistency_loss(
+    const long strides[3],
+    const long dim[3],
+    const float *sds
+) {
+    float total = 0.f;
+    for (long x = 0; x < dim[0]; x++) {
+        for (long y = 0; y < dim[1]; y++) {
+            for (long z = 0; z < dim[2]; z++) {
+                long xyz[3] = {x, y, z};
+                vec3 normal;
+                normalGrid(normal, xyz, strides, dim, sds);
+                float found_norm = vec3_mul_inner(normal, normal);
+                float diff = found_norm - 1.f;
+                total += diff * diff;
+            }
+        }
+    }
+    return total;
+}
+
+extern void __enzyme_autodiff_grid_consistency(
+    void *,
+    int, const long *,
+    int, const long *,
+    int, const float *, float *
+);
+
+static inline void grid_consistency_loss_diff(
+    float *diff_out,
+    const long strides[3],
+    const long dim[3],
+    const float *sds
+) {
+    __enzyme_autodiff_grid_consistency(
+        (void *)grid_consistency_loss,
+        enzyme_const, strides,
+        enzyme_const, dim,
+        enzyme_dup, sds, diff_out
+    );
+}
+
 static inline float sdfCylinder(const vec3 pos,float radius, float height) {
     vec2 xz;
     xz[0] = pos[0];
@@ -303,13 +376,12 @@ void scene_params_init(SceneParams *params, const SceneContext *ctx) {
 }
 
 float scene_consistency_loss(const SceneParams *params) {
-    (void)params;
-    return 0.0;
+    return grid_consistency_loss(grid_strides, grid_dim, &params->grid[0][0][0]);
 }
 
 void scene_consistency_gradient(const SceneParams *params, SceneParams *gradient_out) {
-    (void)params;
     scene_params_fill(gradient_out, 0.0);
+    grid_consistency_loss_diff(&gradient_out->grid[0][0][0], grid_strides, grid_dim, &params->grid[0][0][0]);
 }
 
 void scene_params_copy(SceneParams *out, const SceneParams *params) {
