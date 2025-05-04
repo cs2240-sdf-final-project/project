@@ -824,7 +824,7 @@ float plane_pdf_independent_xz(const vec3 point, const vec3 center, float sigma)
 
 void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult sample,const SceneParams *params, vec3 directLighting, RandomState* random){
 
-    const int num_samples = 10;
+    const int num_samples = 1;
     vec3 sampled_points[num_samples];
 
     vec3 center;
@@ -852,8 +852,20 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
 
         IntersectionResult shadow_hit_point = trace_ray(hitPoint,light_direction,params);
         if(shadow_hit_point.found_intersection){
+
+            const float ray_epsilon1 = 1e-4f;
+
+      
+
             vec3 shadow_hit_intersection_point;
             ray_step(shadow_hit_intersection_point, hitPoint, light_direction, shadow_hit_point.intersection_t);
+
+            vec3 shawdow_normal;
+            get_normal_from(shawdow_normal,shadow_hit_intersection_point,params);
+
+            vec3 offset_position;
+            vec3_scale(offset_position, shawdow_normal, ray_epsilon1);
+            vec3_add(shadow_hit_intersection_point,shadow_hit_intersection_point,offset_position);
 
             vec3 diff_hit;
             vec3_sub(diff_hit,shadow_hit_intersection_point,hitPoint);
@@ -938,23 +950,23 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
         vec3_dup(newSegment.pos,current_position);
         vec3_dup(newSegment.dir,current_direction);
 
-        vec3 directLighting;
+        // vec3 directLighting;
 
-        if(iter == 0){
-            vec3_set(directLighting, 0.0f);
-        }else{
-            SdfResult hit_sample;
-            scene_sample(current_position, params, &hit_sample);
+        // if(iter == 0){
+        //     vec3_set(directLighting, 0.0f);
+        // }else{
+        //     SdfResult hit_sample;
+        //     scene_sample(current_position, params, &hit_sample);
 
-            vec3 hit_normal;
-            get_normal_from(hit_normal, current_position, params);
+        //     vec3 hit_normal;
+        //     get_normal_from(hit_normal, current_position, params);
 
-            computeDirectLighting(current_position,hit_normal,previous_direction,hit_sample,params,directLighting,random);
+        //     computeDirectLighting(current_position,hit_normal,previous_direction,hit_sample,params,directLighting,random);
 
-        }
-        vec3_dup(newSegment.contribution,directLighting);
+        // }
+        // vec3_dup(newSegment.contribution,directLighting);
 
-        //vec3_set(newSegment.contribution,0.0f);
+        vec3_set(newSegment.contribution,0.0f);
     
 
         path.push_back(newSegment);
@@ -1026,8 +1038,8 @@ void get_radiance_at(
     RandomState* random
 
 ) {
-    bool directlightOnly = true;
-    bool countEmitted = true;
+    bool directlightOnly =false;
+    bool countEmitted = false;
     vec3 spectralFilter;
     vec3_set(spectralFilter, 1.f);
     vec3 intensity;
@@ -1044,13 +1056,13 @@ void get_radiance_at(
             vec3_dup(hitDirection,path[i].dir);
             vec3 wi;
             vec3_dup(wi,path[i+1].dir);
-            vec3 direct_light;
-            vec3_dup(direct_light,path[i+1].contribution);
-            if (direct_light[0] != 0.0f || direct_light[1] != 0.0f || direct_light[2] != 0.0f) {
-                printf("Iteration %d: direct_light = (%f, %f, %f), spectralFilter = (%f, %f, %f)\n",
-                       i, direct_light[0], direct_light[1], direct_light[2],
-                       spectralFilter[0], spectralFilter[1], spectralFilter[2]);
-            }
+            // vec3 direct_light;
+            // vec3_dup(direct_light,path[i+1].contribution);
+            // if (direct_light[0] != 0.0f || direct_light[1] != 0.0f || direct_light[2] != 0.0f) {
+            //     printf("Iteration %d: direct_light = (%f, %f, %f), spectralFilter = (%f, %f, %f)\n",
+            //            i, direct_light[0], direct_light[1], direct_light[2],
+            //            spectralFilter[0], spectralFilter[1], spectralFilter[2]);
+            // }
     
 
             
@@ -1063,17 +1075,17 @@ void get_radiance_at(
             
                         
             if (countEmitted) {
-                vec3 emissive;
-                vec3_dup(emissive, sample.emissive);
+                // vec3 emissive;
+                // vec3_dup(emissive, sample.emissive);
     
-                vec3 emissive_part;
-                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+                // vec3 emissive_part;
+                // vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
             
-                vec3_add(intensity, intensity, emissive_part);
+                // vec3_add(intensity, intensity, emissive_part);
 
-                vec3 dl_part;
-                vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
-                vec3_add(intensity,intensity,dl_part);
+                // vec3 dl_part;
+                // vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+                // vec3_add(intensity,intensity,dl_part);
 
             }else{
                 vec3 emissive;
@@ -1118,9 +1130,9 @@ void get_radiance_at(
              
 
         }
-        if(directlightOnly){
-            break;
-        }
+        // if(directlightOnly){
+        //     break;
+        // }
         
         
     }
@@ -1259,13 +1271,13 @@ void render_pixel(
         scene_params_set(dummy_params, p, 1.f);
         const float *raw_dummy_params = float_pointer_from_params(dummy_params);
 
-        __enzyme_fwddiff_radiance(
-            (void*)render_get_radiance_wrapper,
-            enzyme_dup, radiance, d_radiance,
-            enzyme_const, path,
-            enzyme_dup, raw_params, raw_dummy_params,
-            enzyme_const, random
-        );
+        // __enzyme_fwddiff_radiance(
+        //     (void*)render_get_radiance_wrapper,
+        //     enzyme_dup, radiance, d_radiance,
+        //     enzyme_const, path,
+        //     enzyme_dup, raw_params, raw_dummy_params,
+        //     enzyme_const, random
+        // );
 
         for (int ch = 0; ch < 3; ch++) {
             scene_params_set(params_per_channel->rgb[ch], p, d_radiance[ch]);
