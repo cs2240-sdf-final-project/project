@@ -105,9 +105,9 @@ int main(void) {
     SceneParams *loss_deriv = uninit_scene_params();
     SceneParams *scratch = uninit_scene_params();
 
-    const float learning_rate = 1e-1f;
+    const float learning_rate = 5e-1f;
 
-    const int num_epochs = 300;
+    const int num_epochs = 1000;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
         render_image(&real, &gradient, params, ctx); // calculate radiance and gradients
 
@@ -115,13 +115,12 @@ int main(void) {
         float loss = total_loss(&real, &groundtruth, params);
         total_loss_deriv(&real, &groundtruth, &gradient, loss_deriv, scratch, params);
 
-        printf("loss: %f\n", loss);
-        fflush(stdout);
-        printf("deriv"); // TODO: print this struct
-        for (int p = 0; p < number_of_scene_params; p++) {
-            printf("%f ", scene_parameter_get(loss_deriv, p)); // TODO: print this struct
-        }
-        printf("\n"); // TODO: print this struct
+        printf("%4d loss: %f\n", epoch, loss);
+        // printf("deriv"); // TODO: print this struct
+        // for (int p = 0; p < number_of_scene_params; p++) {
+        //     printf(" %f", scene_parameter_get(loss_deriv, p));
+        // }
+        // printf("\n");
         fflush(stdout);
 
         // Gradient step
@@ -138,6 +137,7 @@ int main(void) {
     free_scene_params(scratch);
     free_scene_params(loss_deriv);
     free_scene_params(params);
+    free_scene_context(ctx);
     free_image(&real);
     free_gradient_image(&gradient);
     free_image(&groundtruth);

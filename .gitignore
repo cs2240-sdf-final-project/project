@@ -1,6 +1,4 @@
-build/*.ll
-build/*.exe
-build/*.o
+build
 
 debug-gradient/*.ppm
 debug-fd/*.ppm

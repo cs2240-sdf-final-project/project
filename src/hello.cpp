@@ -235,7 +235,8 @@ static inline float grid_consistency_loss(
             }
         }
     }
-    return total;
+    long total_elements = dim[0] * dim[1] * dim[2];
+    return total / static_cast<float>(total_elements);
 }
 
 extern void __enzyme_autodiff_grid_consistency(
@@ -1274,10 +1275,10 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
         }
         for (long ic = 0; ic < real->image_width; ic++) {
             vec3 out_real;
-            project_pixel_get_radiance(out_real, renderer, ir, ic, params, ctx);
-            // project_pixel_get_gradient(out_real, &ppc, renderer, ir, ic, params, ctx);
+            // project_pixel_get_radiance(out_real, renderer, ir, ic, params, ctx);
+            project_pixel_get_gradient(out_real, &ppc, renderer, ir, ic, params, ctx);
             image_set(real, ir, ic, out_real);
-            // gradient_image_set(&ppc, gradient, ir, ic);
+            gradient_image_set(&ppc, gradient, ir, ic);
         }
         for (int c = 0; c < 3; c++) {
             free_scene_params(ppc.rgb[c]);
