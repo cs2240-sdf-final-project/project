@@ -39,6 +39,8 @@ const float pathContinuationProb = 0.9f;
 
 const int numberOfSampling = 20;
 
+const int radius = 5;
+
 typedef struct{
     vec3 pos;
     vec3 dir;
@@ -1554,7 +1556,7 @@ void edgeDetectionFilterPixel(Image *real, Image *outImage, const SceneParams* p
 
             for (int kh = -1; kh <= 1; ++kh) {
                 long pixelRow = clamp_long(ir + kh, 0, (int)real->image_height - 1);
-                long index = pixelRow * real->image_width + ic;
+                size_t index = pixelRow * real->image_width + ic;
                 // Vertical smoothing for Sobel-X
                 redAccX += tempRedX[index] * KxVer[kh + 1];
                 greenAccX += tempGreenX[index] * KxVer[kh + 1];
@@ -1639,6 +1641,109 @@ void chromaticAberrationFilter(long rShift, long gShift, long bShift, Image* out
 
 } 
 
+float* generateBlurkernel(float sigma){
+
+    float* kernel = nullptr;
+    
+
+    int kernel_size = 2 * radius + 1;
+    kernel = new float[kernel_size];
+
+    float sum = 0.0f;
+
+    // Calculate the kernel values
+    for (int i = 0; i < kernel_size; ++i) {
+        int x = i - 2;  // Adjust x to the correct range
+        float exponent = -(x * x) / (2 * sigma * sigma);
+        kernel[i] = (1.0f / (sqrt(2 * lm_pi) * sigma)) * exp(exponent);
+        sum += kernel[i];  // Accumulate the sum for normalization
+    }
+    for (int i = 0; i < kernel_size; ++i) {
+        kernel[i] /= sum;
+    }
+    return kernel;
+
+
+
+}
+
+void blurFilter(Image* outImage, Image* real, float sigma){
+    float* kernel = generateBlurkernel(sigma);
+    long kernel_size = 2 * radius + 1;
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+
+        for (long ic = 0; ic < real->image_width; ic++) {
+            
+
+            float redAcc = 0.0f, greenAcc = 0.0f, blueAcc = 0.0f;
+
+
+            for (long k = 0; k < kernel_size; ++k) {
+                long pixelCol = clamp_long(ic + k - radius, 0L, static_cast<long>(real->image_width - 1));
+
+                vec3 pixel;
+                image_get(pixel,real,ir,pixelCol);
+                
+                float blurWeight = kernel[k];
+                redAcc += pixel[0] * blurWeight;
+                greenAcc += pixel[1]* blurWeight;
+                blueAcc += pixel[2] * blurWeight;
+
+
+            }
+            vec3 out;
+            out[0] = fmaxf(0.0f, fminf(1.f, redAcc));
+            out[1] = fmaxf(0.0f, fminf(1.f, greenAcc));
+            out[2] = fmaxf(0.0f, fminf(1.f, blueAcc));
+            image_set(outImage, ir, ic, out);
+
+        
+        }
+    }
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+
+        for (long ic = 0; ic < real->image_width; ic++) {
+
+            float redAcc = 0.0f, greenAcc = 0.0f, blueAcc = 0.0f;
+
+            for (long k = 0; k < kernel_size; ++k) {
+                long pixelRow = std::clamp(ir + k - radius, 0L, static_cast<long>(real->image_height - 1));
+
+                vec3 pixel;
+                image_get(pixel,outImage,pixelRow,ic);
+                
+                float blurWeight = kernel[k];
+                redAcc += pixel[0] * blurWeight;
+                greenAcc += pixel[1]* blurWeight;
+                blueAcc += pixel[2] * blurWeight;
+
+
+            }
+            vec3 outReal;
+            outReal[0] = fmaxf(0.0f, fminf(1.f, redAcc));
+
+            outReal[1] = fmaxf(0.0f, fminf(1.f, greenAcc));
+            outReal[2] = fmaxf(0.0f, fminf(1.f, blueAcc));
+            image_set(real, ir, ic, outReal);
+            
+
+        }
+    }
+
+    delete[] kernel;
+
+    
+
+
+
+
+    
+}
+
+
+
 void render_image(Image *real, GradientImage *gradient, const SceneParams *params,RandomState *random) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
@@ -1707,10 +1812,12 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     }
 
 
-    //Image outImage = make_image(real->image_width, real->image_height);
+    Image outImage = make_image(real->image_width, real->image_height);
 
-    //edgeDetectionFilterPixel(real,&outImage);
+    //edgeDetectionFilterPixel(real,&outImage,params,0.8f);
     //chromaticAberrationFilter(-10,10,20,&outImage,real,params);
+
+    blurFilter(&outImage, real, 1.5f);
 
    
 }
