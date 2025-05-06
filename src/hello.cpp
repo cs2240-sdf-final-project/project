@@ -13,6 +13,7 @@
 #include <iostream>
 #include <vector>
 #include <random>
+#include <algorithm> 
 
 int enzyme_dup;
 int enzyme_dupnoneed;
@@ -36,7 +37,7 @@ const float lm_pi = 3.14159265358979323846f;
 
 const float pathContinuationProb = 0.9f;
 
-const int numberOfSampling = 10;
+const int numberOfSampling = 20;
 
 typedef struct{
     vec3 pos;
@@ -355,7 +356,7 @@ static inline void object_leftwall(const vec3 pos, const SceneParams *params, Sd
     vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->diffuse, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->specular, 0.4f);
-    sample->isReflected = true;
+    //sample->isReflected = true;
 }
 // Right:
 static inline void object_rightwall(const vec3 pos, const SceneParams *params, SdfResult *sample) {
@@ -374,7 +375,7 @@ static inline void object_bottomwall(const vec3 pos, const SceneParams *params, 
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
-    sample->isReflected = true;
+    //sample->isReflected = true;
 }
 inline void scene_sample(const vec3 pos, const SceneParams *params, SdfResult *sample) {
     default_scene_sample(sample);
@@ -841,9 +842,10 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
         vec3 currentSamplePoint;
 
         vec3_dup(currentSamplePoint,sampled_points[i]);
+        //printf("Sample Point: x = %f, y = %f, z = %f\n", currentSamplePoint[0], currentSamplePoint[1], currentSamplePoint[2]);
 
         vec3 light_direction;
-
+    
         vec3_sub(light_direction,currentSamplePoint,hitPoint);
 
         float distance2 = vec3_mul_inner(light_direction, light_direction);
@@ -884,7 +886,9 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
                 vec3 lightNormal;
                 vec3_set(lightNormal,0.0f,1.0f,0.0f);
 
-                float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction,lightNormal));
+                //float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction,lightNormal));
+                float cosThetaPrime = fmax(0.0f, vec3_mul_inner(light_direction, lightNormal));
+                
 
                 vec3 bsdf;
                 vec3_set(bsdf,1.0f);
@@ -894,9 +898,17 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
 
                 float pdf = plane_pdf_independent_xz(currentSamplePoint,center,standard_deviation);
 
+                //printf("costheta: %f\n", costheta);
+                //printf("cosThetaPrime: %f\n", cosThetaPrime);
+                // printf("distance2: %f\n", distance2);
+                // printf("pdf: %f\n", pdf);
+
                 
 
                 float last_term = costheta * cosThetaPrime / ((distance2 + 1e-6f) * pdf);
+
+                //printf("last_term (before bsdf scaling): %f\n", last_term);
+
 
                 vec3_scale(bsdf, bsdf,last_term);
                 vec3_cwiseProduct(bsdf,bsdf,emission);
@@ -950,23 +962,23 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
         vec3_dup(newSegment.pos,current_position);
         vec3_dup(newSegment.dir,current_direction);
 
-        // vec3 directLighting;
+        vec3 directLighting;
 
-        // if(iter == 0){
-        //     vec3_set(directLighting, 0.0f);
-        // }else{
-        //     SdfResult hit_sample;
-        //     scene_sample(current_position, params, &hit_sample);
+        if(iter == 0){
+            vec3_set(directLighting, 0.0f);
+        }else{
+            SdfResult hit_sample;
+            scene_sample(current_position, params, &hit_sample);
 
-        //     vec3 hit_normal;
-        //     get_normal_from(hit_normal, current_position, params);
+            vec3 hit_normal;
+            get_normal_from(hit_normal, current_position, params);
 
-        //     computeDirectLighting(current_position,hit_normal,previous_direction,hit_sample,params,directLighting,random);
+            computeDirectLighting(current_position,hit_normal,previous_direction,hit_sample,params,directLighting,random);
 
-        // }
-        // vec3_dup(newSegment.contribution,directLighting);
+        }
+        vec3_dup(newSegment.contribution,directLighting);
 
-        vec3_set(newSegment.contribution,0.0f);
+        //vec3_set(newSegment.contribution,0.0f);
     
 
         path.push_back(newSegment);
@@ -1027,6 +1039,28 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
     
 }
 
+void toneMap(vec3 tone_map_color, const vec3 color) {
+    float luminance = vec3_mul_inner(color, (vec3){0.2126f, 0.7152f, 0.0722f});
+
+    // Reinhard Tone Mapping
+    float toneMappedLuminance = luminance / (1.0f + luminance);
+
+    // Scale the color channels by the tone-mapped luminance
+    if (luminance > 1e-6f) { // Avoid division by zero
+        float scale = toneMappedLuminance / luminance;
+        vec3_scale(tone_map_color, color, scale);
+    } else {
+        vec3_dup(tone_map_color, color);
+    }
+}
+
+void gammaCorrect(vec3 gamma_correct_color, const vec3 color) {
+    float gamma = 2.2f;
+    gamma_correct_color[0] = powf(fmaxf(0.0f, color[0]), 1.0f / gamma);
+    gamma_correct_color[1] = powf(fmaxf(0.0f, color[1]), 1.0f / gamma);
+    gamma_correct_color[2] = powf(fmaxf(0.0f, color[2]), 1.0f / gamma);
+}
+
 
 
 
@@ -1038,9 +1072,11 @@ void get_radiance_at(
     RandomState* random
 
 ) {
+    
     bool directlightOnly =false;
-    bool countEmitted = false;
+    bool countEmitted = true;
     vec3 spectralFilter;
+
     vec3_set(spectralFilter, 1.f);
     vec3 intensity;
     vec3_set(intensity, 0.f);
@@ -1056,8 +1092,8 @@ void get_radiance_at(
             vec3_dup(hitDirection,path[i].dir);
             vec3 wi;
             vec3_dup(wi,path[i+1].dir);
-            // vec3 direct_light;
-            // vec3_dup(direct_light,path[i+1].contribution);
+            vec3 direct_light;
+            vec3_dup(direct_light,path[i+1].contribution);
             // if (direct_light[0] != 0.0f || direct_light[1] != 0.0f || direct_light[2] != 0.0f) {
             //     printf("Iteration %d: direct_light = (%f, %f, %f), spectralFilter = (%f, %f, %f)\n",
             //            i, direct_light[0], direct_light[1], direct_light[2],
@@ -1075,17 +1111,17 @@ void get_radiance_at(
             
                         
             if (countEmitted) {
-                // vec3 emissive;
-                // vec3_dup(emissive, sample.emissive);
+                vec3 emissive;
+                vec3_dup(emissive, sample.emissive);
     
-                // vec3 emissive_part;
-                // vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+                vec3 emissive_part;
+                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
             
-                // vec3_add(intensity, intensity, emissive_part);
+                vec3_add(intensity, intensity, emissive_part);
 
-                // vec3 dl_part;
-                // vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
-                // vec3_add(intensity,intensity,dl_part);
+                vec3 dl_part;
+                vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+                vec3_add(intensity,intensity,dl_part);
 
             }else{
                 vec3 emissive;
@@ -1127,7 +1163,24 @@ void get_radiance_at(
 
             }
             
+            //for direct lighting
+            // vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+      
+
+            // float pdf = 2.f * lm_pi;
+            // vec3_scale(spectralFilter,spectralFilter, pdf);
+
+            // float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
+            //         //float cosine_term = vec3_mul_inner(normal, wi);
+            // vec3_scale(spectralFilter, spectralFilter, cosine_term);
+
+            // vec3 brdf;
+            // vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
+            // vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+                
+            
              
+
 
         }
         // if(directlightOnly){
@@ -1137,7 +1190,20 @@ void get_radiance_at(
         
     }
 
-    vec3_dup(radiance,intensity);
+    // vec3 finalColor;
+    // vec3_dup(finalColor, intensity);
+
+    // // Tone map the final intensity
+    // vec3 tone_mapped_color;
+    // toneMap(tone_mapped_color, finalColor);
+
+    // // Apply gamma correction
+    // vec3 gamma_corrected_color;
+    // gammaCorrect(gamma_corrected_color, tone_mapped_color);
+
+    // vec3_dup(radiance, gamma_corrected_color);
+
+    vec3_dup(radiance, intensity);
 
    
     
@@ -1434,6 +1500,155 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
     }
 }
 
+void edgeDetectionFilterPixel(Image *real, Image *outImage) {
+
+    const float sensitivity = 0.9f;
+    // Sobel Kernels
+    const float KxHor[3] = {1.0f, 0.0f, -1.0f};
+    const float KxVer[3] = {1.0f, 2.0f, 1.0f};
+    const float KyVer[3] = {1.0f, 0.0f, -1.0f};
+    const float KyHor[3] = {1.0f, 2.0f, 1.0f};
+
+    std::vector<float> tempRedX(real->image_width * real->image_height, 0.0f);
+    std::vector<float> tempGreenX(real->image_width * real->image_height, 0.0f);
+    std::vector<float> tempBlueX(real->image_width * real->image_height, 0.0f);
+
+    std::vector<float> tempRedY(real->image_width * real->image_height, 0.0f);
+    std::vector<float> tempGreenY(real->image_width * real->image_height, 0.0f);
+    std::vector<float> tempBlueY(real->image_width * real->image_height, 0.0f);
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+
+        for (long ic = 0; ic < real->image_width; ic++) {
+
+            float redAccX = 0.0f, greenAccX = 0.0f, blueAccX = 0.0f;
+            float redAccY = 0.0f, greenAccY = 0.0f, blueAccY = 0.0f;
+
+            for (int kw = -1; kw <= 1; ++kw) {
+                int pixelCol = clamp(ic + kw, 0, (int)real->image_width - 1);
+                // Get pixel color.  Important to use image_get
+                vec3 pixel_color;
+                image_get(pixel_color, real, ir, pixelCol);
+                // if (pixel_color[0] != 1.0f || pixel_color[1] != 1.0f || pixel_color[2] != 1.0f) {
+                //     printf("pixel_color: %f %f %f\n", pixel_color[0], pixel_color[1], pixel_color[2]);
+                // }
+                float gray = 0.299f * pixel_color[0] + 0.587f * pixel_color[1] + 0.114f * pixel_color[2];
+                
+                pixel_color[0] = gray;
+                pixel_color[1] = gray;
+                pixel_color[2] = gray;
+        
+                redAccX += pixel_color[0] * KxHor[kw + 1];
+                greenAccX += pixel_color[1] * KxHor[kw + 1];
+                blueAccX += pixel_color[2] * KxHor[kw + 1];
+        
+                redAccY += pixel_color[0] * KyHor[kw + 1];
+                greenAccY += pixel_color[1] * KyHor[kw + 1];
+                blueAccY += pixel_color[2] * KyHor[kw + 1];
+            }
+
+            long index = ir * real->image_width + ic;
+            tempRedX[index] = redAccX;
+            tempGreenX[index] = greenAccX;
+            tempBlueX[index] = blueAccX;
+
+            tempRedY[index] = redAccY;
+            tempGreenY[index] = greenAccY;
+            tempBlueY[index] = blueAccY;
+
+        }
+    }
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+
+        for (long ic = 0; ic < real->image_width; ic++) {
+            float redAccX = 0.0f, greenAccX = 0.0f, blueAccX = 0.0f;
+            float redAccY = 0.0f, greenAccY = 0.0f, blueAccY = 0.0f;
+
+            for (int kh = -1; kh <= 1; ++kh) {
+                int pixelRow = clamp(ir + kh, 0, (int)real->image_height - 1);
+                long index = pixelRow * real->image_width + ic;
+                // Vertical smoothing for Sobel-X
+                redAccX += tempRedX[index] * KxVer[kh + 1];
+                greenAccX += tempGreenX[index] * KxVer[kh + 1];
+                blueAccX += tempBlueX[index] * KxVer[kh + 1];
+
+                // Vertical derivative for Sobel-Y
+                redAccY += tempRedY[index] * KyVer[kh + 1];
+                greenAccY += tempGreenY[index] * KyVer[kh + 1];
+                blueAccY += tempBlueY[index] * KyVer[kh + 1];
+               
+            }
+
+            float magR = clamp(sqrtf(redAccX * redAccX + redAccY * redAccY) * sensitivity, 0.0f, 1.0f);
+            float magG = clamp(sqrtf(greenAccX * greenAccX + greenAccY * greenAccY) * sensitivity, 0.0f, 1.0f);
+            float magB = clamp(sqrtf(blueAccX * blueAccX + blueAccY * blueAccY) * sensitivity, 0.0f, 1.0f);
+
+        
+            vec3 out;
+            out[0] = magR;
+            out[1] = magG;
+            out[2] = magB;
+            image_set(outImage,ir,ic,out);
+
+        }
+    }
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+
+        for (long ic = 0; ic < real->image_width; ic++) {
+            vec3 copy;
+            image_get(copy,outImage,ir,ic);
+            image_set(real,ir,ic,copy);
+        }
+    }
+
+   
+  
+}
+
+void chromaticAberrationFilter(long rShift, long gShift, long bShift, Image* outImage, Image* real){
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+
+        for (long ic = 0; ic < real->image_width; ic++) {
+            vec3 pixel;
+            image_get(pixel,real,ir,ic);
+
+            int rShiftedCol = clamp(ic + rShift, 0, real->image_width - 1);
+            int gShiftedCol = clamp(ic + gShift, 0, real->image_width - 1);
+            int bShiftedCol = clamp(ic + bShift, 0, real->image_width - 1);
+
+            vec3 rChannelPixel;
+            vec3 gChannelPixel;
+            vec3 bChannelPixel;
+            image_get(rChannelPixel, real, ir, rShiftedCol);
+            image_get(gChannelPixel, real, ir, gShiftedCol);
+            image_get(bChannelPixel, real, ir, bShiftedCol);
+
+            vec3 outputPixel;
+            outputPixel[0] = rChannelPixel[0];
+            outputPixel[1] = gChannelPixel[1];
+            outputPixel[2] = bChannelPixel[2];
+
+            image_set(outImage, ir, ic, outputPixel);
+
+            
+        }
+    }
+    for (long ir = 0; ir < real->image_height; ir++) {
+
+        for (long ic = 0; ic < real->image_width; ic++) {
+            vec3 copy;
+            image_get(copy,outImage,ir,ic);
+            image_set(real,ir,ic,copy);
+        }
+    }
+
+
+
+} 
+
 void render_image(Image *real, GradientImage *gradient, const SceneParams *params,RandomState *random) {
     float aspect = (float)real->image_width / (float)real->image_height ;
     float near_clip = 0.1f;
@@ -1493,6 +1708,7 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
             render_pixel_wrapper(out_real, camera_position, direction, &ppc, params,random);
 
             image_set(real, ir, ic, out_real);
+
             gradient_image_set(&ppc, gradient, ir, ic);
         }
         for (int c = 0; c < 3; c++) {
@@ -1500,9 +1716,10 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
         }
     }
 
-    // for (int c = 0; c < 3; c++) {
-    //     free_scene_params(ppc.rgb[c]);
-    // }
+    Image outImage = make_image(real->image_width, real->image_height);
 
-    //test_hemisphere_sampling();
+    //edgeDetectionFilterPixel(real,&outImage);
+    chromaticAberrationFilter(-10,10,20,&outImage,real);
+
+   
 }
