@@ -81,6 +81,9 @@ void ray_step(vec3 out, const vec3 origin, const vec3 direction, float t) {
 float clamp(float x, float min, float max) {
     return fmaxf(fminf(x, max), min);
 }
+long clamp_long(long x, long min, long max) {
+    return fmaxf(fminf(x, max), min);
+}
 
 void dehomogenize(vec3 out, const vec4 in) {
     for (int i = 0; i < 3; i++) {
@@ -1094,11 +1097,7 @@ void get_radiance_at(
             vec3_dup(wi,path[i+1].dir);
             vec3 direct_light;
             vec3_dup(direct_light,path[i+1].contribution);
-            // if (direct_light[0] != 0.0f || direct_light[1] != 0.0f || direct_light[2] != 0.0f) {
-            //     printf("Iteration %d: direct_light = (%f, %f, %f), spectralFilter = (%f, %f, %f)\n",
-            //            i, direct_light[0], direct_light[1], direct_light[2],
-            //            spectralFilter[0], spectralFilter[1], spectralFilter[2]);
-            // }
+          
     
 
             
@@ -1163,20 +1162,7 @@ void get_radiance_at(
 
             }
             
-            //for direct lighting
-            // vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
-      
 
-            // float pdf = 2.f * lm_pi;
-            // vec3_scale(spectralFilter,spectralFilter, pdf);
-
-            // float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
-            //         //float cosine_term = vec3_mul_inner(normal, wi);
-            // vec3_scale(spectralFilter, spectralFilter, cosine_term);
-
-            // vec3 brdf;
-            // vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
-            // vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
                 
             
              
@@ -1500,22 +1486,23 @@ void image_get(vec3 radiance, Image *image, long ir, long ic) {
     }
 }
 
-void edgeDetectionFilterPixel(Image *real, Image *outImage) {
+void edgeDetectionFilterPixel(Image *real, Image *outImage, const SceneParams* params,float sensitivity) {
 
-    const float sensitivity = 0.9f;
+    
     // Sobel Kernels
     const float KxHor[3] = {1.0f, 0.0f, -1.0f};
     const float KxVer[3] = {1.0f, 2.0f, 1.0f};
     const float KyVer[3] = {1.0f, 0.0f, -1.0f};
     const float KyHor[3] = {1.0f, 2.0f, 1.0f};
+    size_t numPixels = static_cast<size_t>(real->image_width * real->image_height);
 
-    std::vector<float> tempRedX(real->image_width * real->image_height, 0.0f);
-    std::vector<float> tempGreenX(real->image_width * real->image_height, 0.0f);
-    std::vector<float> tempBlueX(real->image_width * real->image_height, 0.0f);
+    std::vector<float> tempRedX(numPixels, 0.0f);
+    std::vector<float> tempGreenX(numPixels, 0.0f);
+    std::vector<float> tempBlueX(numPixels, 0.0f);
 
-    std::vector<float> tempRedY(real->image_width * real->image_height, 0.0f);
-    std::vector<float> tempGreenY(real->image_width * real->image_height, 0.0f);
-    std::vector<float> tempBlueY(real->image_width * real->image_height, 0.0f);
+    std::vector<float> tempRedY(numPixels, 0.0f);
+    std::vector<float> tempGreenY(numPixels, 0.0f);
+    std::vector<float> tempBlueY(numPixels, 0.0f);
 
     for (long ir = 0; ir < real->image_height; ir++) {
 
@@ -1525,7 +1512,7 @@ void edgeDetectionFilterPixel(Image *real, Image *outImage) {
             float redAccY = 0.0f, greenAccY = 0.0f, blueAccY = 0.0f;
 
             for (int kw = -1; kw <= 1; ++kw) {
-                int pixelCol = clamp(ic + kw, 0, (int)real->image_width - 1);
+                long pixelCol = clamp_long(ic + kw, 0, (int)real->image_width - 1);
                 // Get pixel color.  Important to use image_get
                 vec3 pixel_color;
                 image_get(pixel_color, real, ir, pixelCol);
@@ -1547,7 +1534,7 @@ void edgeDetectionFilterPixel(Image *real, Image *outImage) {
                 blueAccY += pixel_color[2] * KyHor[kw + 1];
             }
 
-            long index = ir * real->image_width + ic;
+            size_t index = ir * real->image_width + ic;
             tempRedX[index] = redAccX;
             tempGreenX[index] = greenAccX;
             tempBlueX[index] = blueAccX;
@@ -1566,7 +1553,7 @@ void edgeDetectionFilterPixel(Image *real, Image *outImage) {
             float redAccY = 0.0f, greenAccY = 0.0f, blueAccY = 0.0f;
 
             for (int kh = -1; kh <= 1; ++kh) {
-                int pixelRow = clamp(ir + kh, 0, (int)real->image_height - 1);
+                long pixelRow = clamp_long(ir + kh, 0, (int)real->image_height - 1);
                 long index = pixelRow * real->image_width + ic;
                 // Vertical smoothing for Sobel-X
                 redAccX += tempRedX[index] * KxVer[kh + 1];
@@ -1607,7 +1594,10 @@ void edgeDetectionFilterPixel(Image *real, Image *outImage) {
   
 }
 
-void chromaticAberrationFilter(long rShift, long gShift, long bShift, Image* outImage, Image* real){
+
+
+
+void chromaticAberrationFilter(long rShift, long gShift, long bShift, Image* outImage, Image* real,const SceneParams* params){
 
     for (long ir = 0; ir < real->image_height; ir++) {
 
@@ -1615,9 +1605,9 @@ void chromaticAberrationFilter(long rShift, long gShift, long bShift, Image* out
             vec3 pixel;
             image_get(pixel,real,ir,ic);
 
-            int rShiftedCol = clamp(ic + rShift, 0, real->image_width - 1);
-            int gShiftedCol = clamp(ic + gShift, 0, real->image_width - 1);
-            int bShiftedCol = clamp(ic + bShift, 0, real->image_width - 1);
+            long rShiftedCol = clamp_long(ic + rShift, 0, real->image_width - 1);
+            long gShiftedCol = clamp_long(ic + gShift, 0, real->image_width - 1);
+            long bShiftedCol = clamp_long(ic + bShift, 0, real->image_width - 1);
 
             vec3 rChannelPixel;
             vec3 gChannelPixel;
@@ -1716,10 +1706,11 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
         }
     }
 
-    Image outImage = make_image(real->image_width, real->image_height);
+
+    //Image outImage = make_image(real->image_width, real->image_height);
 
     //edgeDetectionFilterPixel(real,&outImage);
-    chromaticAberrationFilter(-10,10,20,&outImage,real);
+    //chromaticAberrationFilter(-10,10,20,&outImage,real,params);
 
    
 }
