@@ -109,7 +109,7 @@ int main(void) {
 
     const float learning_rate = 1e-1f;
 
-    const int num_epochs = 300;
+    const int num_epochs = 1000;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
         render_image_phong(&real, &gradient, params,ctx, rng); // calculate radiance and gradients
 
@@ -117,7 +117,7 @@ int main(void) {
         float loss = total_loss(&real, &groundtruth, params);
         total_loss_deriv(&real, &groundtruth, &gradient, loss_deriv, scratch, params);
 
-        printf("loss: %f\n", loss);
+        printf("%4d loss: %f\n", epoch, loss);
         fflush(stdout);
         printf("deriv"); // TODO: print this struct
         for (int p = 0; p < number_of_scene_params; p++) {
@@ -137,11 +137,11 @@ int main(void) {
         fclose(freal);
     }
 
-    free_scene_context(ctx);
     free_random(rng);
     free_scene_params(scratch);
     free_scene_params(loss_deriv);
     free_scene_params(params);
+    free_scene_context(ctx);
     free_image(&real);
     free_gradient_image(&gradient);
     free_image(&groundtruth);

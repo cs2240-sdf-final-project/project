@@ -13,7 +13,13 @@
 #include "hello.h"
 #include "sim_random.h"
 
+long lmin(long a, long b) {
+    return a < b ? a : b;
+}
+
 int main(void) {
+    const long number_of_params_to_export = 100;
+
     long image_width = 500;
     long image_height = 500;
     RandomState *rng = make_random();
@@ -33,7 +39,7 @@ int main(void) {
         assert(freal);
         image_write_ppm(&real, freal);
 
-        for (long p = 0; p < number_of_scene_params; p++) {
+        for (long p = 0; p < lmin(number_of_scene_params, number_of_params_to_export); p++) {
             std::ostringstream filename;
             filename << std::setw(3) << std::setfill('0') << p << ".ppm";
             std::filesystem::path grad_path = dir / filename.str();
@@ -48,10 +54,10 @@ int main(void) {
     body("debug-fd", finite_differences);
     body("debug-effects", render_image_effects);
 
+    free_scene_context(ctx);
+    free_scene_params(params);
     free_image(&grad_slice);
     free_image(&real);
     free_gradient_image(&gradient);
     free_random(rng);
-    free_scene_params(params);
-    free_scene_context(ctx);
 }
