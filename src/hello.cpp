@@ -1817,7 +1817,7 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     //edgeDetectionFilterPixel(real,&outImage,params,0.8f);
     //chromaticAberrationFilter(-10,10,20,&outImage,real,params);
 
-    blurFilter(&outImage, real, 1.5f);
+    blurFilter(&outImage, real, 3.f);
 
    
 }
