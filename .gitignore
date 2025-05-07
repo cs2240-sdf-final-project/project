@@ -1,7 +1,6 @@
 build
 
-debug-gradient/*.ppm
-debug-fd/*.ppm
+debug-*/*.ppm
 descent-sequence/*.ppm
 
 .vscode
