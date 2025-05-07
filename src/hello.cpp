@@ -449,17 +449,18 @@ inline void object_capsule(const vec3 pos, const SceneParams *params, const Scen
     vec3_add(world, world, params->object_3_pos);
     vec3 local;
     vec3_sub(local, pos, world);
-    vec3 a = {0.3f, 0.f, 0.f};
-    vec3 b = {-0.3f, 0.f, 0.f};
-    vec3 c = {0.f, 0.3f, 0.f};
-    sample->distance = sdfTriangle(local, a, b, c);
+    // vec3 a = {0.3f, 0.f, 0.f};
+    // vec3 b = {-0.3f, 0.f, 0.f};
+    // vec3 c = {0.f, 0.3f, 0.f};
+    // sample->distance = sdfTriangle(local, a, b, c);
     // std::cout << sample->distance << std::endl;
-    // sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
+    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
+
 // inline void object_triangle(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
 //     (void)ctx;
 //     vec3 world = {-0.4f, 0.3f, 0.5f};
