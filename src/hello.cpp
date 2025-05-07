@@ -145,6 +145,68 @@ float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     return dist;
 }
 
+float dot2(vec3 v) {
+    return vec3_mul_inner(v, v);
+}
+
+float sign(float x) {
+    return (x > 0.0f) - (x < 0.0f);
+}
+
+float sdfTriangle(const vec3 pos, const vec3 a, const vec3 b, const vec3 c) {
+    vec3 ba;
+    vec3_sub(ba, b, a);
+    vec3 pa;
+    vec3_sub(pa, pos, a);
+    vec3 cb;
+    vec3_sub(cb, c, b);
+    vec3 pb;
+    vec3_sub(pb, pos, b);
+    vec3 ac;
+    vec3_sub(ac, a, c);
+    vec3 pc;
+    vec3_sub(pc, pos, c);
+    vec3 nor;
+    vec3_mul_cross(nor, ba, ac);
+    vec3 ba_cross_nor;
+    vec3_mul_cross(ba_cross_nor, ba, nor);
+    vec3 cb_cross_nor;
+    vec3_mul_cross(cb_cross_nor, cb, nor);
+    vec3 ac_cross_nor;
+    vec3_mul_cross(ac_cross_nor, ac, nor);
+    vec3 ba_scaled;
+    vec3_scale(ba_scaled, ba, clamp(vec3_mul_inner(ba,pa)/dot2(ba),0.0,1.0));
+    vec3 cb_scaled;
+    vec3_scale(cb_scaled, cb, clamp(vec3_mul_inner(cb,pb)/dot2(cb),0.0,1.0));
+    vec3 ac_scaled;
+    vec3_scale(ac_scaled, ac, clamp(vec3_mul_inner(ac,pc)/dot2(ac),0.0,1.0));
+    vec3 ba_scaled_minus_pa;
+    vec3_sub(ba_scaled_minus_pa, ba_scaled, pa);
+    vec3 cb_scaled_minus_pb;
+    vec3_sub(cb_scaled_minus_pb, cb_scaled, pb);
+    vec3 ac_scaled_minus_pc;
+    vec3_sub(ac_scaled_minus_pc, ac_scaled, pc);
+
+    float ba_dot = vec3_mul_inner(ba_cross_nor, pa);
+    float cb_dot = vec3_mul_inner(cb_cross_nor, pb);
+    float ac_dot = vec3_mul_inner(ac_cross_nor, pc);
+
+    float sum_signs = sign(ba_dot) + sign(cb_dot) + sign(ac_dot);
+    bool condition = (sum_signs < 2.0);
+
+    float ba_len2 = dot2(ba_scaled_minus_pa);
+    float cb_len2 = dot2(cb_scaled_minus_pb);
+    float ac_len2 = dot2(ac_scaled_minus_pc);
+
+    float min_len2 = fmin(fmin(ba_len2, cb_len2), ac_len2);
+
+    float nor_dot_pa = vec3_mul_inner(nor, pa);
+    float proj_len2 = (nor_dot_pa * nor_dot_pa) / dot2(nor);
+
+    float result = sqrtf(condition ? min_len2 : proj_len2);
+    return result;
+}
+
 float sdfTriPrism(const vec3 origin, float h0, float h1) {
     //h[0] represents half the length of the base of the triangular prism
     //h[1] represents half the height of the prism along the z-axis
@@ -387,12 +449,32 @@ inline void object_capsule(const vec3 pos, const SceneParams *params, const Scen
     vec3_add(world, world, params->object_3_pos);
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
+    vec3 a = {0.3f, 0.f, 0.f};
+    vec3 b = {-0.3f, 0.f, 0.f};
+    vec3 c = {0.f, 0.3f, 0.f};
+    sample->distance = sdfTriangle(local, a, b, c);
+    // std::cout << sample->distance << std::endl;
+    // sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
+// inline void object_triangle(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+//     (void)ctx;
+//     vec3 world = {-0.4f, 0.3f, 0.5f};
+//     vec3_add(world, world, params->object_3_pos);
+//     vec3 local;
+//     vec3_sub(local, pos, world);
+//     vec3 a = {0.3, 0, 0};
+//     vec3 b = {-0.3, 0, 0};
+//     vec3 c = {0, 0.3, 0};
+//     sample->distance = sdfTriangle(local, a, b, c);
+//     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
+//     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+//     //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
+//     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
+// }
 // Back:
 inline void object_backwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)params;

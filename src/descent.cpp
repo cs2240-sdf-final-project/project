@@ -109,7 +109,7 @@ int main(void) {
 
     const float learning_rate = 1e-1f;
 
-    const int num_epochs = 300;
+    const int num_epochs = 1000;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
         render_image_phong(&real, &gradient, params,ctx, rng); // calculate radiance and gradients
 
