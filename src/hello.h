@@ -81,6 +81,7 @@ void render_image_phong(Image *real, GradientImage *gradient, const SceneParams 
 void render_image_tracing(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *random);
 void finite_differences(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng);
 void render_image_effects(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng);
+void finite_differences_tracing(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng);
 
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no);
 

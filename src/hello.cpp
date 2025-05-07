@@ -39,6 +39,8 @@ const float lm_pi = 3.14159265358979323846f;
 
 const float pathContinuationProb = 0.9f;
 
+const int numOfSampling = 5;
+
 enum BisectAffinity {
     BISECT_LEFT,
     BISECT_RIGHT,
@@ -266,7 +268,15 @@ struct SceneParams {
     //light color
     float object_1_color[3];
     float object_1_direction[3];
+    
+
+    //indirect light 
+    float emissiveR;
+    float emissiveG;
+    float emissiveB;
+
     float object_color1;
+
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -436,7 +446,7 @@ inline void object_cylinder(const vec3 pos, const SceneParams *params, const Sce
     vec3 world = {0.6f, 0.2f, -0.2f};
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfCylinder(local, 0.3f , 0.8f );
+    sample->distance = sdfCylinder(local, 0.3f + params->object_1_r , 0.3f + params->object_1_h );
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -454,7 +464,7 @@ inline void object_capsule(const vec3 pos, const SceneParams *params, const Scen
     // vec3 c = {0.f, 0.3f, 0.f};
     // sample->distance = sdfTriangle(local, a, b, c);
     // std::cout << sample->distance << std::endl;
-    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
+    sample->distance = sdfVerticalCapsule(local,0.6f + params->object_2_r,0.5f+ params->object_2_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
@@ -1280,39 +1290,49 @@ void get_radiance_tracing(
         scene_sample(hitPosition, params, ctx, &sample);
         vec3 normal;
         get_normal_from(normal, hitPosition, params, ctx);
-        if (countEmitted) {
-            vec3 emissive;
-            vec3_dup(emissive, sample.emissive);
-            vec3 emissive_part;
-            vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-            vec3_add(intensity, intensity, emissive_part);
-            vec3 dl_part;
-            vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
-            vec3_add(intensity,intensity,dl_part);
-        }else{
-            vec3 emissive;
-            vec3_dup(emissive, sample.emissive);
-            vec3 emissive_part;
-            vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-            vec3_add(intensity, intensity, emissive_part);
-        }
-        countEmitted = false;
-        if(sample.isReflected){
-            vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
-            vec3 brdf;
-            vec3_set(brdf, 1.0f);
-            vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
-        }else{
-            vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
-            float pdf = 2.f * lm_pi;
-            vec3_scale(spectralFilter,spectralFilter, pdf);
-            float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
-            //float cosine_term = vec3_mul_inner(normal, wi);
-            vec3_scale(spectralFilter, spectralFilter, cosine_term);
-            vec3 brdf;
-            vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
-            vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
-        }
+
+        vec3 emissive;
+        vec3_dup(emissive, sample.emissive);
+        vec3 emissive_part;
+        vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+        vec3_add(intensity, intensity, emissive_part);
+        vec3 dl_part;
+        vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+        vec3_add(intensity,intensity,dl_part);
+        // if (countEmitted) {
+        //     vec3 emissive;
+        //     vec3_dup(emissive, sample.emissive);
+        //     vec3 emissive_part;
+        //     vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+        //     vec3_add(intensity, intensity, emissive_part);
+        //     vec3 dl_part;
+        //     vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+        //     vec3_add(intensity,intensity,dl_part);
+        // }else{
+        //     vec3 emissive;
+        //     vec3_dup(emissive, sample.emissive);
+        //     vec3 emissive_part;
+        //     vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+        //     vec3_add(intensity, intensity, emissive_part);
+        // }
+        // countEmitted = false;
+        // if(sample.isReflected){
+        //     vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+        //     vec3 brdf;
+        //     vec3_set(brdf, 1.0f);
+        //     vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+        // }else{
+        //     vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+        //     float pdf = 2.f * lm_pi;
+        //     vec3_scale(spectralFilter,spectralFilter, pdf);
+        //     float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
+        //     //float cosine_term = vec3_mul_inner(normal, wi);
+        //     vec3_scale(spectralFilter, spectralFilter, cosine_term);
+        //     vec3 brdf;
+        //     vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
+        //     vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+        // }
+        
     }
     vec3_dup(radiance, intensity);
 }
@@ -1369,10 +1389,10 @@ void render_pixel_tracing(
         vec3 y_star;
         ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
         vec3 y_star_radiance;
-        // std::vector<Segment> other_path(path);
-        // step_segment(other_path.at(0), critical_point.t_if_found_critical_point);
-        // get_radiance_tracing(y_star_radiance, other_path, params, ctx);
-        // diff_sdf(y_star, dummy_params, params, ctx);
+        std::vector<Segment> other_path(path);
+        step_segment(other_path.at(0), critical_point.t_if_found_critical_point);
+        get_radiance_tracing(y_star_radiance, other_path, params, ctx);
+        diff_sdf(y_star, dummy_params, params, ctx);
         vec3 deltaL;
         vec3_sub(deltaL, y_star_radiance, real);
         vec3_scale(deltaL, deltaL, -1.f / distance_threshold);
@@ -1380,6 +1400,73 @@ void render_pixel_tracing(
         free_scene_params(dummy_params);
     }
     params_nan_to_num(params_per_channel, 0.0);
+}
+
+SceneParams *make_scene_params() {
+    SceneParams *out = (SceneParams *)calloc(sizeof(float), (size_t)number_of_scene_params);
+    assert(out);
+    return out;
+}
+void params_per_channel_set(SceneParamsPerChannel *ppc, float value) {
+    for (int c = 0; c < 3; c++) {
+        float *pc = float_pointer_from_params(ppc->rgb[c]);
+        for (int i = 0; i < number_of_scene_params; i++) {
+            pc[i] = value;
+        }
+    }
+}
+void params_per_channel_add_assign(SceneParamsPerChannel *ppc, const SceneParamsPerChannel *to_add) {
+    for (int c = 0; c < 3; c++) {
+        float *apc = float_pointer_from_params(ppc->rgb[c]);
+        const float *bpc = float_pointer_from_params(to_add->rgb[c]);
+        for (int i = 0; i < number_of_scene_params; i++) {
+            apc[i] += bpc[i];
+        }
+    }
+}
+
+void render_pixel_tracing_wrapper_super_sample(
+    vec3 real,
+    const vec3 origin,
+    const vec3 direction,
+    SceneParamsPerChannel *params_per_channel,
+    const SceneParams *params,
+    const SceneContext *ctx,
+    RandomState *rng
+) {
+    SceneParamsPerChannel* working = make_ppc();
+    
+    vec3_set(real, 0.0);
+    params_per_channel_set(params_per_channel, 0.0);
+    for(int i = 0; i < numOfSampling; i++){
+        vec3 temp_real;
+        render_pixel_tracing(temp_real, origin,direction, working, params, ctx,rng);
+        vec3_add(real,real, temp_real);
+        params_per_channel_add_assign(params_per_channel, working);
+    }
+    vec3_scale(real,real, 1.f/numOfSampling);
+    free_ppc(working);
+}
+
+void radiance_tracing_super_sample(vec3 real,
+        const vec3 origin,
+        const vec3 direction,
+        const SceneParams *params,
+        const SceneContext *ctx,
+        RandomState *rng){
+            
+    vec3_set(real, 0.0);
+   
+    for(int i = 0; i < numOfSampling; i++){
+        vec3 temp_real;
+        std::vector<Segment> path_left = getSecondaryPath(origin, direction, rng, params, ctx);
+        get_radiance_tracing(temp_real,path_left,params,ctx);
+        vec3_add(real,real, temp_real);
+    }
+    vec3_scale(real,real, 1.f/numOfSampling);
+
+       
+
 }
 
 long get_index(const Strides *s, long r, long c, long p) {
@@ -1618,17 +1705,64 @@ void finite_differences(Image *real, GradientImage *gradient, const SceneParams 
     }
     free_renderer(renderer);
 }
+void finite_differences_tracing(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng){
+    (void)rng;
+    const float half_epsilon = 2e-1f;
+
+    Renderer *renderer = make_renderer(real->image_width, real->image_height);
+    #pragma omp parallel for
+    for (long ir = 0; ir < real->image_height; ir++) {
+        printf("current row is: %ld",ir);
+        printf(" \n");
+        fflush(stdout);
+        SceneParams *working = uninit_scene_params();
+        SceneParamsPerChannel *ppc = make_ppc();
+        for (long ic = 0; ic < real->image_width; ic++) {
+            PixelRenderer pr = make_pixel_renderer(renderer, ir, ic);
+            for (long p = 0; p < number_of_scene_params; p++) {
+                float param_value = scene_parameter_get(params, p);
+                scene_params_copy(working, params);
+                scene_params_set(working, p, param_value - half_epsilon);
+                
+                
+                vec3 real_left;
+                radiance_tracing_super_sample(real_left,pr.camera_position,pr.direction,working,ctx,rng);
+                
+                scene_params_copy(working, params);
+                scene_params_set(working, p, param_value + half_epsilon);
+
+                vec3 real_right;
+                radiance_tracing_super_sample(real_right,pr.camera_position,pr.direction,working,ctx,rng);
+
+                vec3 gradient;
+                vec3_sub(gradient, real_right, real_left);
+                vec3_scale(gradient, gradient, 1.f / (half_epsilon));
+                set_ppc(ppc, p, gradient);
+            }
+            std::vector<Segment> path_debug = getSecondaryPath(pr.camera_position, pr.direction, rng, params, ctx);
+            vec3 real_debug;
+            get_radiance_tracing(real_debug,path_debug, params, ctx);
+            image_set(real, ir, ic, real_debug);
+            gradient_image_set(ppc, gradient, ir, ic);
+        }
+        free_ppc(ppc);
+        free_scene_params(working);
+    }
+    free_renderer(renderer);
+
+}
 
 void render_image_tracing(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng) {
     (void)rng;
     Renderer *renderer = make_renderer(real->image_width, real->image_height);
     #pragma omp parallel for
     for (long ir = 0; ir < real->image_height; ir++) {
+        
         SceneParamsPerChannel *ppc = make_ppc();
         for (long ic = 0; ic < real->image_width; ic++) {
             PixelRenderer pr = make_pixel_renderer(renderer, ir, ic);
             vec3 out_real;
-            render_pixel_tracing(out_real, pr.camera_position, pr.direction, ppc, params, ctx, rng);
+            render_pixel_tracing_wrapper_super_sample(out_real, pr.camera_position, pr.direction, ppc, params, ctx, rng);
             image_set(real, ir, ic, out_real);
             gradient_image_set(ppc, gradient, ir, ic);
         }
