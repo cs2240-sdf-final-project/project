@@ -193,6 +193,10 @@ static inline void normalGrid(
     const long dim[3],
     const float *sds
 ) {
+    float step_size[3];
+    for (int axis = 0; axis < 3; axis++) {
+        step_size[axis] = 1.0f / static_cast<float>(dim[axis] - 1);
+    }
     long center_index = 0;
     for (long d = 0; d < 3; d++) {
         assert(pos[d] >= 0 && pos[d] < dim[d]);
@@ -211,9 +215,10 @@ static inline void normalGrid(
             float sample_value = sds[sample_index];
             float diff = sample_value - center_value;
             normal_sum += diff * static_cast<float>(dd);
-            normal_count += 1.0f;
+            normal_count += step_size[axis];
         }
         normal_out[axis] = normal_sum / normal_count;
+        // printf("%g\n", normal_out[axis]);
     }
 }
 
@@ -229,7 +234,8 @@ static inline float grid_consistency_loss(
                 long xyz[3] = {x, y, z};
                 vec3 normal;
                 normalGrid(normal, xyz, strides, dim, sds);
-                float found_norm = vec3_mul_inner(normal, normal);
+                float found_norm = vec3_len(normal);
+                // printf("%g\n", found_norm);
                 float diff = found_norm - 1.f;
                 total += diff * diff;
             }
@@ -239,19 +245,19 @@ static inline float grid_consistency_loss(
     return total / static_cast<float>(total_elements);
 }
 
-extern void __enzyme_autodiff_grid_consistency(
-    void *,
-    int, const long *,
-    int, const long *,
-    int, const float *, float *
-);
-
 static inline void grid_consistency_loss_diff(
     float *diff_out,
     const long strides[3],
     const long dim[3],
     const float *sds
 ) {
+    extern void __enzyme_autodiff_grid_consistency(
+        void *,
+        int, const long *,
+        int, const long *,
+        int, const float *, float *
+    );
+
     __enzyme_autodiff_grid_consistency(
         (void *)grid_consistency_loss,
         enzyme_const, strides,
@@ -626,7 +632,7 @@ extern float __enzyme_autodiff_normal(void *, int, const float *, float *, int, 
 
 inline float scene_sample_sdf(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     float ret = INFINITY;
-    #define OBJ(sd, mat, norm) do { ret = fminf(ret, sd(pos, params, ctx)); } while (0);
+    #define OBJ(sd, mat, norm) { ret = fminf(ret, sd(pos, params, ctx)); };
     SCENE
     #undef OBJ
     return ret;
@@ -774,7 +780,7 @@ void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsI
 
 inline static void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample, const SceneParams *params) {
     float lightColors[3][3] = {
-        {.2f, .1f, .8f},
+        {.2f, .2f, .2f},
         {.2f, .2f, .2f},
         {.2f, .2f, .2f},
     };
