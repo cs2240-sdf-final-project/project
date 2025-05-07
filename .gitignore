@@ -5,6 +5,7 @@ build/*.o
 debug-gradient/*.ppm
 debug-fd/*.ppm
 descent-sequence/*.ppm
+debug-*/*
 
 .vscode
 *.bpm

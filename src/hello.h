@@ -7,7 +7,6 @@
 
 extern int number_of_scene_params;
 
-typedef struct PixelRenderer PixelRenderer;
 typedef struct SceneContext SceneContext;
 typedef struct SceneParams SceneParams;
 
@@ -78,14 +77,17 @@ void free_gradient_image(GradientImage *image);
 void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic);
 void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic);
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *random);
+void render_image_phong(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *random);
+void render_image_tracing(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *random);
+void finite_differences(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng);
+void render_image_effects(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng);
+
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no);
 
-PixelRenderer *make_pixel_renderer(long image_width, long image_height);
-void free_pixel_renderer(PixelRenderer *renderer);
-void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
-void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
-
-void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx, RandomState *rng);
+// typedef struct Renderer PixelRenderer;
+// PixelRenderer *make_renderer(long image_width, long image_height);
+// void free_renderer(PixelRenderer *renderer);
+// void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
+// void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
 
 #endif // HELLO_H

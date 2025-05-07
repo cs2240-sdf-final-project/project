@@ -1,5 +1,5 @@
 LLVM_ENZYME=/usr/local/src/Enzyme/enzyme/build/Enzyme/LLVMEnzyme-16.so
-FLAGS=-O2 -g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion -fopenmp
+FLAGS=-O3 -g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion -fopenmp
 FRONTEND_FLAGS=-fsanitize=address,undefined
 LINK_FLAGS=-lm -lpthread
 
@@ -31,7 +31,7 @@ build/input.ll: src/hello.cpp
 	clang++-16 $^ -S -emit-llvm -o $@ $(FLAGS)
 
 build/output.ll: build/input.ll
-	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) '-passes=default<O3>,enzyme' -o $@ -S
+	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) '-passes=enzyme' -o $@ -S
 
 build/sim_random.o: src/sim_random.cpp
 	clang++-16 -c $^ -o $@

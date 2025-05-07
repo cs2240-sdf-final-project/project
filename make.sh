@@ -1,7 +1,5 @@
 #!/bin/bash
 
-
-
 docker build -t cs2240-final-build -f - . <<EOF || exit 1
 FROM debian:bookworm-slim
 RUN apt update && apt install -y neovim sudo build-essential curl wget llvm-16-dev clang-16 git cmake ninja-build libzstd-dev

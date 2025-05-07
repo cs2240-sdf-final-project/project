@@ -111,7 +111,7 @@ int main(void) {
 
     const int num_epochs = 300;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
-        render_image(&real, &gradient, params,ctx, rng); // calculate radiance and gradients
+        render_image_phong(&real, &gradient, params,ctx, rng); // calculate radiance and gradients
 
         // Compute loss and derivative of loss
         float loss = total_loss(&real, &groundtruth, params);
