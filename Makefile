@@ -18,10 +18,10 @@ run-descent: build/descent.exe
 	build/descent.exe
 	ffmpeg -y -framerate 30 -pattern_type glob -i 'descent-sequence/real_*.ppm' descent-sequence.mp4
 
-build/debug.exe: src/debug.cpp build/hello.o
+build/debug.exe: src/debug.cpp build/hello.o build/sim_random.o
 	clang++-16 $^ $(FRONTEND_FLAGS) $(FLAGS) $(LINK_FLAGS) -o $@
 
-build/descent.exe: src/descent.cpp build/hello.o
+build/descent.exe: src/descent.cpp build/hello.o build/sim_random.o
 	clang++-16 $^ $(FRONTEND_FLAGS) $(FLAGS) $(LINK_FLAGS) -o $@
 
 build/hello.o: build/output.ll
@@ -31,7 +31,10 @@ build/input.ll: src/hello.cpp
 	clang++-16 $^ -S -emit-llvm -o $@ $(FLAGS)
 
 build/output.ll: build/input.ll
-	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) -passes=enzyme -o $@ -S
+	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) '-passes=default<O3>,enzyme' -o $@ -S
+
+build/sim_random.o: src/sim_random.cpp
+	clang++-16 -c $^ -o $@
 
 clean:
 	rm -f build/*.ll build/*.exe build/*.o

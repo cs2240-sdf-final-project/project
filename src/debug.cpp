@@ -9,15 +9,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "hello.h"
+#include "sim_random.h"
 
-static void debug_fd(const SceneParams *params, const SceneContext *ctx)  {
+static void debug_fd(const SceneParams *params, const SceneContext *ctx, RandomState *rng)  {
     mkdir("debug-fd", 0777); // do nothing if debug-fd already exists
 
     long image_width = 500;
     long image_height = 500;
 
     GradientImage gradient = make_gradient_image(image_width, image_height);
-    finite_differences(&gradient, image_width, image_height, params, ctx);
+    finite_differences(&gradient, image_width, image_height, params, ctx, rng);
 
     Image grad_slice = make_image(image_width, image_height);
     for (long p = 0; p < number_of_scene_params; p++) {
@@ -33,7 +34,7 @@ static void debug_fd(const SceneParams *params, const SceneContext *ctx)  {
     free_gradient_image(&gradient);
 }
 
-static void debug_gradient(const SceneParams *params, const SceneContext *ctx)  {
+static void debug_gradient(const SceneParams *params, const SceneContext *ctx, RandomState *rng)  {
     mkdir("debug-gradient", 0777); // do nothing if debug-gradient already exists
 
     long image_width = 500;
@@ -41,7 +42,8 @@ static void debug_gradient(const SceneParams *params, const SceneContext *ctx)  
     Image real = make_image(image_width, image_height);
 
     GradientImage gradient = make_gradient_image(image_width, image_height);
-    render_image(&real, &gradient, params, ctx);
+
+    render_image(&real, &gradient, params, ctx, rng);
 
     FILE *freal = fopen("real.ppm", "w");
     image_write_ppm(&real, freal);
@@ -62,11 +64,15 @@ static void debug_gradient(const SceneParams *params, const SceneContext *ctx)  
 }
 
 int main(void) {
+    RandomState *rng = make_random();
+
     SceneContext *ctx = make_scene_context();
     SceneParams *params = uninit_scene_params();
     scene_params_init(params, ctx);
-    debug_gradient(params, ctx);
-    debug_fd(params, ctx);
+    debug_gradient(params, ctx, rng);
+    debug_fd(params, ctx, rng);
+
+    free_random(rng);
     free_scene_params(params);
     free_scene_context(ctx);
 }

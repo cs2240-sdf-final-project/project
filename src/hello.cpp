@@ -11,6 +11,11 @@
 #include <inttypes.h>
 
 #include "hello.h"
+#include "sim_random.h"
+#include <iostream>
+#include <vector>
+#include <random>
+#include <algorithm>
 
 int enzyme_dup;
 int enzyme_dupnoneed;
@@ -26,6 +31,17 @@ const int number_of_steps = 1'000;
 const float contact_threshold = 1e-4f;
 // width of the scene band
 const float distance_threshold = 1e-2f;
+
+const float lm_pi = 3.14159265358979323846f;
+
+const float pathContinuationProb = 0.9f;
+
+typedef struct{
+    vec3 pos;
+    vec3 dir;
+    vec3 contribution;
+
+}Segment;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -56,6 +72,10 @@ void ray_step(vec3 out, const vec3 origin, const vec3 direction, float t) {
     vec3 step_size;
     vec3_scale(step_size, direction, t);
     vec3_add(out, origin, step_size);
+}
+
+long clampl(long x, long min, long max) {
+    return std::max(std::min(x, max), min);
 }
 
 float clamp(float x, float min, float max) {
@@ -94,33 +114,10 @@ void vec2_abs(vec2 out, const vec2 in) {
     }
 }
 
-inline float sdfGrid(
-    const vec3 pos,
-    const long strides[3],
-    const long dim[3],
-    const float *sds
-) {
-    const float sigma = 0.1f;
-    float accum = 0.0;
-    for (long x0 = 0; x0 < dim[0]; x0++) {
-        float fx0 = (float)x0 / (float)dim[0];
-        for (long x1 = 0; x1 < dim[1]; x1++) {
-            float fx1 = (float)x1 / (float)dim[1];
-            for (long x2 = 0; x2 < dim[2]; x2++) {
-                float fx2 = (float)x2 / (float)dim[2];
-                vec3 fx = {fx0, fx1, fx2};
-                vec3 displacement;
-                vec3_sub(displacement, pos, fx);
-                float distance = vec3_len(displacement);
-                float numer = expf(-distance * distance * (1.f / (2.f * sigma * sigma)));
-                float denom = sqrtf(2.f * (float)M_PI * sigma * sigma);
-                float weight = numer / denom;
-                long i = x0 * strides[0] + x1 * strides[1] + x2 * strides[2];
-                accum += weight * sds[i];
-            }
-        }
-    }
-    return accum;
+void vec3_cwiseProduct(vec3 out, vec3 a, vec3 b){
+    out[0] = a[0]*b[0];
+    out[1] = a[1]*b[1];
+    out[2] = a[2]*b[2];
 }
 
 float sdfCylinder(const vec3 pos,float radius, float height) {
@@ -197,6 +194,21 @@ struct SceneParams {
     float object_3_pos[3];
     float color[3];
     float h1, h2;
+    float object_1_x;
+    float object_1_y;
+    float object_1_z;
+    float object_1_r;
+    float object_1_h;
+    float object_2_x;
+    float object_2_y;
+    float object_2_z;
+    float object_2_r;
+    float object_2_h;
+
+    //light color
+    float object_1_color[3];
+    float object_1_direction[3];
+    float object_color1;
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -305,11 +317,34 @@ void scene_params_set(SceneParams *params, long p, float value) {
     raw_params[p] = value;
 }
 
+SceneParamsPerChannel *make_ppc(void) {
+    SceneParamsPerChannel *ppc = new SceneParamsPerChannel;
+    for (int c = 0; c < 3; c++) {
+        ppc->rgb[c] = uninit_scene_params();
+    }
+    return ppc;
+}
+
+void set_ppc(SceneParamsPerChannel *ppc, long param, vec3 value) {
+    for (int ch = 0; ch < 3; ch++) {
+        scene_params_set(ppc->rgb[ch], param, value[ch]);
+    }
+}
+
+void free_ppc(SceneParamsPerChannel *ppc) {
+    for (int ch = 0; ch < 3; ch++) {
+        free_scene_params(ppc->rgb[ch]);
+    }
+    delete ppc;
+}
+
 typedef struct {
     float distance;
     float ambient[3];
     float diffuse[3];
     float specular[3];
+    float emissive[3];
+    bool isReflected;
     float shininess;
 } SdfResult;
 
@@ -318,6 +353,8 @@ static inline void default_scene_sample(SdfResult *s) {
     vec3_set(s->ambient, 0.0);
     vec3_set(s->diffuse, 0.0);
     vec3_set(s->specular, 0.0);
+    vec3_set(s->emissive, 0.0);
+    s->isReflected = false;
     s->shininess = 1.0;
 }
 
@@ -330,6 +367,8 @@ static inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
     vec3_dup(destination->ambient, b->ambient);
     vec3_dup(destination->diffuse, b->diffuse);
     vec3_dup(destination->specular, b->specular);
+    vec3_dup(destination->emissive, b->emissive);
+    destination->isReflected = b->isReflected;
     destination->shininess = b->shininess;
 }
 
@@ -343,6 +382,8 @@ static inline void object_cylinder(const vec3 pos, const SceneParams *params, co
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
+    //vec3_set(sample->emissive, 10.f, 10.f, 10.f);
+    //sample->isReflected = true;
 }
 static inline void object_capsule(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)ctx;
@@ -353,6 +394,7 @@ static inline void object_capsule(const vec3 pos, const SceneParams *params, con
     sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
+    //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 // Back:
@@ -374,6 +416,8 @@ static inline void object_topwall(const vec3 pos, const SceneParams *params, con
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
+    vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
+
 }
 // Left:
 static inline void object_leftwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
@@ -384,6 +428,7 @@ static inline void object_leftwall(const vec3 pos, const SceneParams *params, co
     vec3_set(sample->ambient, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->diffuse, 0.63f, 0.065f, 0.05f);
     vec3_set(sample->specular, 0.4f);
+    //sample->isReflected = true;
 }
 // Right:
 static inline void object_rightwall(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
@@ -404,6 +449,7 @@ static inline void object_bottomwall(const vec3 pos, const SceneParams *params, 
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
+    //sample->isReflected = true;
 }
 
 inline __attribute__((always_inline)) void
@@ -586,6 +632,7 @@ inline static void phongLight(vec3 radiance, const vec3 looking, const vec3 norm
     };
     vec3_add(lightColors[0], lightColors[0], params->color);
     // world[0] -= params->object_3_pos[0];
+
     float lightDirections[3][3] = {
         {0.f, -1.f, 0.f},
         {-3.f, 2.f, 0.f},
@@ -597,9 +644,17 @@ inline static void phongLight(vec3 radiance, const vec3 looking, const vec3 norm
     for (int l = 0; l < 3; l++) {
         vec3 lightColor;
         vec3_dup(lightColor, lightColors[l]);
+        lightColor[0] += params->object_1_color[0];
+        lightColor[1] += params->object_1_color[1];
+        lightColor[2] += params->object_1_color[2];
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
+        light_dir[0] += params->object_1_direction[0];
+        light_dir[1] += params->object_1_direction[1];
+        light_dir[2] += params->object_1_direction[2];
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
+
+
         vec3 bounce;
         for (int i = 0; i < 3; i++) {
             bounce[i] = light_dir[i] - normal[i] * facing * 2.f;
@@ -673,6 +728,253 @@ IntersectionResult trace_ray_get_critical_point(
     return ret;
 }
 
+void sample_points_on_plane(int num_points, const vec3 center_on_plane, float stddev, vec3 *output_points, RandomState* random) {
+    if (fabsf(center_on_plane[1] - 1.0f) > 1e-6) {
+         fprintf(stderr, "Warning: Center point provided is not on the plane y=1.0\n");
+         // Adjust center y to be exactly on the plane if desired, or proceed.
+         // center_on_plane.y = 1.0f; // Optional correction
+    }
+
+    for (int i = 0; i < num_points; ++i) {
+        // Generate standard normal random numbers (mean 0, stddev 1)
+        float rand_x_std = generate_normal_random(random);
+        float rand_z_std = generate_normal_random(random);
+
+        // Scale by standard deviation and add to the center coordinates
+        float point_x = center_on_plane[0] + stddev * rand_x_std;
+        float point_z = center_on_plane[2] + stddev * rand_z_std;
+        float point_y = center_on_plane[1]; // Keep y fixed on the plane
+
+        vec3_set(output_points[i], point_x, point_y, point_z);
+    }
+}
+
+float normal_pdf(float x, float mu, float sigma) {
+    if (sigma <= 0.0f) { return 0.0f; } // Avoid division by zero / invalid input
+    float diff = x - mu;
+    float exponent = -(diff * diff) / (2.0f * sigma * sigma);
+    float scaling_factor = 1.0f / (sigma * sqrtf(2.0f * lm_pi));
+    return scaling_factor * expf(exponent);
+}
+// --------------------------------------------------------------------
+
+/**
+ * @brief Calculates the joint PDF for a point on a plane, assuming its X and Z
+ * coordinates were sampled independently from N(center.x, sigma^2)
+ * and N(center.z, sigma^2) respectively.
+ * Assumes point.y is fixed and matches center.y implicitly.
+ *
+ * @param point The vec3 point (e.g., {px, py, pz}) to evaluate.
+ * @param center The vec3 center of the distribution on the plane (e.g., {cx, cy, cz}).
+ * @param sigma The standard deviation used for sampling X and Z.
+ * @return float The joint probability density value for the XZ coordinates.
+ */
+float plane_pdf_independent_xz(const vec3 point, const vec3 center, float sigma) {
+    // Assumes point and center are float[3] or compatible struct access
+    // Use point[0] or point.x depending on your vec3 definition
+    float pdf_x = normal_pdf(point[0], center[0], sigma);
+    float pdf_z = normal_pdf(point[2], center[2], sigma);
+
+    // Joint PDF is the product due to independence
+    return pdf_x * pdf_z;
+}
+
+void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample,const SceneParams *params, const SceneContext *ctx, vec3 directLighting, RandomState* random){
+    const int num_samples = 1;
+    vec3 sampled_points[num_samples];
+
+    vec3 center;
+    vec3_set(center, 0.0f, 1.0f, 0.0f); // Center of distribution on the plane y=1.0
+    float standard_deviation = 0.5f;     // Adjust spread as needed
+
+    sample_points_on_plane(num_samples, center, standard_deviation, sampled_points,random);
+
+    vec3 contribution;
+    vec3_set(contribution,0.0f);
+
+    for(int i = 0; i < num_samples;i++){
+        vec3 currentSamplePoint;
+
+        vec3_dup(currentSamplePoint,sampled_points[i]);
+
+        vec3 light_direction;
+
+        vec3_sub(light_direction,currentSamplePoint,hitPoint);
+
+        float distance2 = vec3_mul_inner(light_direction, light_direction);
+
+        vec3_norm(light_direction,light_direction);
+
+        IntersectionResult shadow_hit_point = trace_ray_get_intersection(hitPoint,light_direction,params, ctx);
+        if(shadow_hit_point.found_intersection){
+            const float ray_epsilon1 = 1e-4f;
+
+            vec3 shadow_hit_intersection_point;
+            ray_step(shadow_hit_intersection_point, hitPoint, light_direction, shadow_hit_point.intersection_t);
+
+            vec3 shawdow_normal;
+            get_normal_from(shawdow_normal,shadow_hit_intersection_point,params, ctx);
+
+            vec3 offset_position;
+            vec3_scale(offset_position, shawdow_normal, ray_epsilon1);
+            vec3_add(shadow_hit_intersection_point,shadow_hit_intersection_point,offset_position);
+
+            vec3 diff_hit;
+            vec3_sub(diff_hit,shadow_hit_intersection_point,hitPoint);
+            float hitDistance = vec3_len(diff_hit);
+
+            vec3 diff_light;
+            vec3_sub(diff_light,currentSamplePoint,hitPoint);
+            float distToLight = vec3_len(diff_light);
+
+            if(fabsf(hitDistance - distToLight) < 1e-4f){
+
+                float costheta = fmaxf(0.f, vec3_mul_inner(light_direction,hitNormal));
+
+                vec3 emission;
+                vec3_set(emission, 0.9f);
+                vec3 lightNormal;
+                vec3_set(lightNormal,0.0f,1.0f,0.0f);
+
+                float cosThetaPrime = fmax(0.0f, vec3_mul_inner(light_direction, lightNormal));
+
+                vec3 bsdf;
+                vec3_set(bsdf,1.0f);
+
+                vec3_scale(bsdf,sample.diffuse, 1.0f / lm_pi);
+
+                float pdf = plane_pdf_independent_xz(currentSamplePoint,center,standard_deviation);
+
+                float last_term = costheta * cosThetaPrime / ((distance2 + 1e-6f) * pdf);
+
+                vec3_scale(bsdf, bsdf,last_term);
+                vec3_cwiseProduct(bsdf,bsdf,emission);
+
+                vec3_add(contribution,contribution,bsdf);
+            }
+        }
+    }
+    vec3_scale(contribution,contribution,1.0f/num_samples);
+    vec3_dup(directLighting,contribution);
+}
+
+std::vector<Segment> getSecondaryPath(
+    vec3 origin,
+    vec3 direction,
+    RandomState *random,
+    const SceneParams *params,
+    const SceneContext *ctx
+){
+    std::vector<Segment> path;
+
+    vec3 current_position;
+    vec3_dup(current_position, origin);
+    vec3 current_direction;
+    vec3_dup(current_direction,direction);
+    vec3 previous_direction;
+    vec3_set(previous_direction,0.0f);
+
+    int iter = 0;
+
+    while(true){
+        iter++;
+        IntersectionResult hitPoint = trace_ray_get_intersection(current_position,current_direction,params, ctx);
+        if(!hitPoint.found_intersection){
+            return path;
+        }
+        //store current ray
+        Segment newSegment;
+        vec3_dup(newSegment.pos,current_position);
+        vec3_dup(newSegment.dir,current_direction);
+
+        vec3 directLighting;
+
+        if(iter == 0){
+            vec3_set(directLighting, 0.0f);
+        }else{
+            SdfResult hit_sample;
+            scene_sample(current_position, params, ctx, &hit_sample);
+
+            vec3 hit_normal;
+            get_normal_from(hit_normal, current_position, params, ctx);
+
+            computeDirectLighting(current_position,hit_normal,hit_sample,params,ctx, directLighting,random);
+
+        }
+        vec3_dup(newSegment.contribution,directLighting);
+
+        path.push_back(newSegment);
+
+        if(random_next_float(random)> pathContinuationProb){
+            break;
+        }
+
+        //find intersection point
+
+        vec3 hit_intersection_point;
+        ray_step(hit_intersection_point, current_position, current_direction, hitPoint.intersection_t);
+
+        SdfResult sample;
+        scene_sample(hit_intersection_point, params, ctx, &sample);
+
+        vec3 normal;
+        get_normal_from(normal, hit_intersection_point, params, ctx);
+
+
+        vec3 newDir;
+        if(sample.isReflected){
+            vec3 refl_dir;
+            vec3_reflect(refl_dir,current_direction,normal);
+            vec3_dup(newDir,refl_dir);
+            //sample_hemisphere(newDir, normal, random);
+        }else{
+
+            //uniformSampleHemisphere(newDir, normal);
+            sample_hemisphere(newDir, normal, random);
+
+        }
+        //sample_hemisphere(newDir, normal, random);
+        //uniformSampleHemisphere(newDir, normal);
+
+        const float ray_epsilon = 1e-4f;
+
+        vec3 offset_position;
+        vec3_scale(offset_position, normal, ray_epsilon);
+        vec3_add(hit_intersection_point,hit_intersection_point,offset_position);
+
+        //update new ray
+        vec3_dup(current_position,hit_intersection_point);
+        vec3_dup(previous_direction,current_direction);
+        vec3_dup(current_direction,newDir);
+
+    }
+
+    return path;
+}
+
+void toneMap(vec3 tone_map_color, const vec3 color) {
+    vec3 map_weights = {0.2126f, 0.7152f, 0.0722f};
+    float luminance = vec3_mul_inner(color, map_weights);
+
+    // Reinhard Tone Mapping
+    float toneMappedLuminance = luminance / (1.0f + luminance);
+
+    // Scale the color channels by the tone-mapped luminance
+    if (luminance > 1e-6f) { // Avoid division by zero
+        float scale = toneMappedLuminance / luminance;
+        vec3_scale(tone_map_color, color, scale);
+    } else {
+        vec3_dup(tone_map_color, color);
+    }
+}
+
+void gammaCorrect(vec3 gamma_correct_color, const vec3 color) {
+    float gamma = 2.2f;
+    gamma_correct_color[0] = powf(fmaxf(0.0f, color[0]), 1.0f / gamma);
+    gamma_correct_color[1] = powf(fmaxf(0.0f, color[1]), 1.0f / gamma);
+    gamma_correct_color[2] = powf(fmaxf(0.0f, color[2]), 1.0f / gamma);
+}
+
 inline static void get_radiance_at(
     vec3 radiance,
     const IntersectionResult *intersection,
@@ -694,6 +996,82 @@ inline static void get_radiance_at(
     phongLight(radiance, direction, normal, &sample, params);
 }
 
+void get_radiance_at(
+    vec3 radiance,
+    std::vector<Segment> &path,
+    const SceneParams *params,
+    const SceneContext *ctx
+) {
+    bool countEmitted = true;
+    vec3 spectralFilter;
+    vec3_set(spectralFilter, 1.f);
+    vec3 intensity;
+    vec3_set(intensity, 0.f);
+    for(size_t i = 0; i < path.size(); i++){
+        if(i != path.size() - 1){
+            vec3 hitPosition;
+            vec3_dup(hitPosition, path[i+1].pos);
+            vec3 hitDirection;
+            vec3_dup(hitDirection,path[i].dir);
+            vec3 wi;
+            vec3_dup(wi,path[i+1].dir);
+            vec3 direct_light;
+            vec3_dup(direct_light,path[i+1].contribution);
+            SdfResult sample;
+            scene_sample(hitPosition, params, ctx, &sample);
+            vec3 normal;
+            get_normal_from(normal, hitPosition, params, ctx);
+            if (countEmitted) {
+                vec3 emissive;
+                vec3_dup(emissive, sample.emissive);
+                vec3 emissive_part;
+                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+                vec3_add(intensity, intensity, emissive_part);
+                vec3 dl_part;
+                vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+                vec3_add(intensity,intensity,dl_part);
+            }else{
+                vec3 emissive;
+                vec3_dup(emissive, sample.emissive);
+
+                vec3 emissive_part;
+                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+                vec3_add(intensity, intensity, emissive_part);
+            }
+            countEmitted = false;
+            if(sample.isReflected){
+                vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+                vec3 brdf;
+                vec3_set(brdf, 1.0f);
+                vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+            }else{
+                vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+                float pdf = 2.f * lm_pi;
+                vec3_scale(spectralFilter,spectralFilter, pdf);
+                float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
+                    //float cosine_term = vec3_mul_inner(normal, wi);
+                vec3_scale(spectralFilter, spectralFilter, cosine_term);
+                vec3 brdf;
+                vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
+                vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+
+            }
+        }
+    }
+    vec3_dup(radiance, intensity);
+}
+
+static void params_nan_to_num(SceneParamsPerChannel *ppc, float num) {
+    for (int ch = 0; ch < 3; ch++) {
+        for (long p = 0; p < number_of_scene_params; p++) {
+            float param = scene_parameter_get(ppc->rgb[ch], p);
+            if (isnan(param)) {
+                scene_params_set(ppc->rgb[ch], p, num);
+            }
+        }
+    }
+}
+
 GradientImage make_gradient_image(long image_width, long image_height) {
     const long num_subpixels = 3;
     long num_floats = number_of_scene_params * image_width * image_height * num_subpixels;
@@ -711,17 +1089,6 @@ GradientImage make_gradient_image(long image_width, long image_height) {
     ret.num_subpixels = 3;
     ret.buf = buf;
     return ret;
-}
-
-static void params_nan_to_num(SceneParamsPerChannel *ppc, float num) {
-    for (int ch = 0; ch < 3; ch++) {
-        for (long p = 0; p < number_of_scene_params; p++) {
-            float param = scene_parameter_get(ppc->rgb[ch], p);
-            if (isnan(param)) {
-                scene_params_set(ppc->rgb[ch], p, num);
-            }
-        }
-    }
 }
 
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no) {
@@ -802,6 +1169,7 @@ float render_get_radiance_wrapper(
     return radiance[ch];
 }
 
+// TODO: fix the signature here
 extern void __enzyme_autodiff_radiance(
     void *,
     int, const IntersectionResult *,
@@ -875,7 +1243,7 @@ void render_pixel_get_gradient(
     params_nan_to_num(params_per_channel, 0.0);
 }
 
-inline long get_index(const Strides *s, long r, long c, long p) {
+long get_index(const Strides *s, long r, long c, long p) {
     return r * s->row_stride + c * s->col_stride + p * s->subpixel_stride;
 }
 
@@ -1015,7 +1383,7 @@ PixelRenderer *make_pixel_renderer(long image_width, long image_height) {
     mat4x4 world_from_camera;
     mat4x4_invert(world_from_camera, projection_view);
 
-    PixelRenderer *ret = new PixelRenderer();
+    PixelRenderer *ret = new PixelRenderer;
     mat4x4_dup(ret->world_from_camera, world_from_camera);
     vec3_dup(ret->camera_position, camera_position);
     ret->image_width = image_width;
@@ -1059,38 +1427,32 @@ void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, lon
     render_pixel_get_radiance(real, renderer->camera_position, direction, params, ctx);
 }
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx) {
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng) {
+    (void)rng;
     PixelRenderer *renderer = make_pixel_renderer(real->image_width, real->image_height);
     #pragma omp parallel for
     for (long ir = 0; ir < real->image_height; ir++) {
-        SceneParamsPerChannel ppc;
-        for (int c = 0; c < 3; c++) {
-            ppc.rgb[c] = uninit_scene_params();
-        }
+        SceneParamsPerChannel *ppc = make_ppc();
         for (long ic = 0; ic < real->image_width; ic++) {
             vec3 out_real;
-            project_pixel_get_gradient(out_real, &ppc, renderer, ir, ic, params, ctx);
+            project_pixel_get_gradient(out_real, ppc, renderer, ir, ic, params, ctx);
             image_set(real, ir, ic, out_real);
-            gradient_image_set(&ppc, gradient, ir, ic);
+            gradient_image_set(ppc, gradient, ir, ic);
         }
-        for (int c = 0; c < 3; c++) {
-            free_scene_params(ppc.rgb[c]);
-        }
+        free_ppc(ppc);
     }
     free_pixel_renderer(renderer);
 }
 
-void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx) {
+void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx, RandomState *rng) {
+    (void)rng;
     const float half_epsilon = 1e-5f;
 
     PixelRenderer *renderer = make_pixel_renderer(image_width, image_height);
     #pragma omp parallel for
     for (long ir = 0; ir < image_height; ir++) {
         SceneParams *working = uninit_scene_params();
-        SceneParamsPerChannel ppc;
-        for (int c = 0; c < 3; c++) {
-            ppc.rgb[c] = uninit_scene_params();
-        }
+        SceneParamsPerChannel *ppc = make_ppc();
         for (long ic = 0; ic < image_width; ic++) {
             for (long p = 0; p < number_of_scene_params; p++) {
                 float param_value = scene_parameter_get(params, p);
@@ -1106,17 +1468,127 @@ void finite_differences(GradientImage *gradient, long image_width, long image_he
                 vec3 gradient;
                 vec3_sub(gradient, real_right, real_left);
                 vec3_scale(gradient, gradient, 1.f / (half_epsilon));
-
-                for (int ch = 0; ch < 3; ch++) {
-                    scene_params_set(ppc.rgb[ch], p, gradient[ch]);
-                }
+                set_ppc(ppc, p, gradient);
             }
-            gradient_image_set(&ppc, gradient, ir, ic);
+            gradient_image_set(ppc, gradient, ir, ic);
         }
+        free_ppc(ppc);
         free_scene_params(working);
-        for (int ch = 0; ch < 3; ch++) {
-            free_scene_params(ppc.rgb[ch]);
-        }
     }
     free_pixel_renderer(renderer);
+}
+
+void edgeDetectionFilterPixel(const Image *real, Image *outImage) {
+    const float sensitivity = 0.9f;
+    // Sobel Kernels
+    const float KxHor[3] = {1.0f, 0.0f, -1.0f};
+    const float KxVer[3] = {1.0f, 2.0f, 1.0f};
+    const float KyVer[3] = {1.0f, 0.0f, -1.0f};
+    const float KyHor[3] = {1.0f, 2.0f, 1.0f};
+
+    size_t num_pixels = static_cast<size_t>(real->image_width * real->image_height);
+    std::vector<float> tempRedX(num_pixels, 0.0f);
+    std::vector<float> tempGreenX(num_pixels, 0.0f);
+    std::vector<float> tempBlueX(num_pixels, 0.0f);
+
+    std::vector<float> tempRedY(num_pixels, 0.0f);
+    std::vector<float> tempGreenY(num_pixels, 0.0f);
+    std::vector<float> tempBlueY(num_pixels, 0.0f);
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+        for (long ic = 0; ic < real->image_width; ic++) {
+
+            float redAccX = 0.0f, greenAccX = 0.0f, blueAccX = 0.0f;
+            float redAccY = 0.0f, greenAccY = 0.0f, blueAccY = 0.0f;
+
+            for (int kw = -1; kw <= 1; ++kw) {
+                long pixelCol = clampl(ic + kw, 0, (int)real->image_width - 1);
+                // Get pixel color.  Important to use image_get
+                vec3 pixel_color;
+                image_get(pixel_color, real, ir, pixelCol);
+                // if (pixel_color[0] != 1.0f || pixel_color[1] != 1.0f || pixel_color[2] != 1.0f) {
+                //     printf("pixel_color: %f %f %f\n", pixel_color[0], pixel_color[1], pixel_color[2]);
+                // }
+                float gray = 0.299f * pixel_color[0] + 0.587f * pixel_color[1] + 0.114f * pixel_color[2];
+
+                pixel_color[0] = gray;
+                pixel_color[1] = gray;
+                pixel_color[2] = gray;
+
+                redAccX += pixel_color[0] * KxHor[kw + 1];
+                greenAccX += pixel_color[1] * KxHor[kw + 1];
+                blueAccX += pixel_color[2] * KxHor[kw + 1];
+
+                redAccY += pixel_color[0] * KyHor[kw + 1];
+                greenAccY += pixel_color[1] * KyHor[kw + 1];
+                blueAccY += pixel_color[2] * KyHor[kw + 1];
+            }
+
+            size_t index = static_cast<size_t>(ir * real->image_width + ic);
+            tempRedX[index] = redAccX;
+            tempGreenX[index] = greenAccX;
+            tempBlueX[index] = blueAccX;
+
+            tempRedY[index] = redAccY;
+            tempGreenY[index] = greenAccY;
+            tempBlueY[index] = blueAccY;
+
+        }
+    }
+
+    for (long ir = 0; ir < real->image_height; ir++) {
+        for (long ic = 0; ic < real->image_width; ic++) {
+            float redAccX = 0.0f, greenAccX = 0.0f, blueAccX = 0.0f;
+            float redAccY = 0.0f, greenAccY = 0.0f, blueAccY = 0.0f;
+
+            for (int kh = -1; kh <= 1; ++kh) {
+                long pixelRow = clampl(ir + kh, 0, (int)real->image_height - 1);
+                size_t index = static_cast<size_t>(pixelRow * real->image_width + ic);
+                // Vertical smoothing for Sobel-X
+                redAccX += tempRedX[index] * KxVer[kh + 1];
+                greenAccX += tempGreenX[index] * KxVer[kh + 1];
+                blueAccX += tempBlueX[index] * KxVer[kh + 1];
+                // Vertical derivative for Sobel-Y
+                redAccY += tempRedY[index] * KyVer[kh + 1];
+                greenAccY += tempGreenY[index] * KyVer[kh + 1];
+                blueAccY += tempBlueY[index] * KyVer[kh + 1];
+            }
+            float magR = clamp(sqrtf(redAccX * redAccX + redAccY * redAccY) * sensitivity, 0.0f, 1.0f);
+            float magG = clamp(sqrtf(greenAccX * greenAccX + greenAccY * greenAccY) * sensitivity, 0.0f, 1.0f);
+            float magB = clamp(sqrtf(blueAccX * blueAccX + blueAccY * blueAccY) * sensitivity, 0.0f, 1.0f);
+            vec3 out;
+            out[0] = magR;
+            out[1] = magG;
+            out[2] = magB;
+            image_set(outImage,ir,ic,out);
+
+        }
+    }
+}
+
+void chromaticAberrationFilter(long rShift, long gShift, long bShift, Image* outImage, const Image* real){
+    for (long ir = 0; ir < real->image_height; ir++) {
+        for (long ic = 0; ic < real->image_width; ic++) {
+            vec3 pixel;
+            image_get(pixel,real,ir,ic);
+
+            long rShiftedCol = clampl(ic + rShift, 0, real->image_width - 1);
+            long gShiftedCol = clampl(ic + gShift, 0, real->image_width - 1);
+            long bShiftedCol = clampl(ic + bShift, 0, real->image_width - 1);
+
+            vec3 rChannelPixel;
+            vec3 gChannelPixel;
+            vec3 bChannelPixel;
+            image_get(rChannelPixel, real, ir, rShiftedCol);
+            image_get(gChannelPixel, real, ir, gShiftedCol);
+            image_get(bChannelPixel, real, ir, bShiftedCol);
+
+            vec3 outputPixel;
+            outputPixel[0] = rChannelPixel[0];
+            outputPixel[1] = gChannelPixel[1];
+            outputPixel[2] = bChannelPixel[2];
+
+            image_set(outImage, ir, ic, outputPixel);
+        }
+    }
 }

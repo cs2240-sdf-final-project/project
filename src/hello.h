@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include "linmath.h"
+#include "sim_random.h"
 
 extern int number_of_scene_params;
 
@@ -26,6 +27,7 @@ typedef struct {
 
 SceneParams *uninit_scene_params();
 void scene_params_init(SceneParams *params, const SceneContext *ctx);
+
 void free_scene_params(SceneParams *params);
 float scene_parameter_get(const SceneParams *params, long p);
 void scene_params_set(SceneParams *params, long p, float value);
@@ -76,7 +78,7 @@ void free_gradient_image(GradientImage *image);
 void gradient_image_set(const SceneParamsPerChannel *ppc, GradientImage *image, long ir, long ic);
 void gradient_image_get(SceneParamsPerChannel *ppc, const GradientImage *image, long ir, long ic);
 
-void render_image(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx);
+void render_image(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *random);
 void gradient_image_slice(Image *image, const GradientImage *gradient, long parameter_no);
 
 PixelRenderer *make_pixel_renderer(long image_width, long image_height);
@@ -84,6 +86,6 @@ void free_pixel_renderer(PixelRenderer *renderer);
 void project_pixel_get_gradient(vec3 real, SceneParamsPerChannel *ppc, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
 void project_pixel_get_radiance(vec3 real, PixelRenderer *renderer, long ir, long ic, const SceneParams *params, const SceneContext *ctx);
 
-void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx);
+void finite_differences(GradientImage *gradient, long image_width, long image_height, const SceneParams *params, const SceneContext *ctx, RandomState *rng);
 
 #endif // HELLO_H
