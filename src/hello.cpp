@@ -23,6 +23,9 @@ int enzyme_dupnoneed;
 int enzyme_out;
 int enzyme_const;
 
+// blur kernel effect radius
+const int blur_radius = 5;
+
 // we take steps at most this size in order to avoid missing
 // sign changes in the directional derivatives
 const float max_step_size = 1.0f;
@@ -1802,11 +1805,57 @@ void chromaticAberrationFilter(long rShift, long gShift, long bShift, Image* out
     }
 }
 
+float* generateBlurkernel(float sigma){
+    float* kernel = nullptr;
+    int kernel_size = 2 * blur_radius + 1;
+    assert(kernel_size > 0);
+    kernel = new float[static_cast<size_t>(kernel_size)];
+    float sum = 0.0f;
+    // Calculate the kernel values
+    for (int i = 0; i < kernel_size; ++i) {
+        float x = static_cast<float>(i - 2);  // Adjust x to the correct range
+        float exponent = -(x * x) / (2 * sigma * sigma);
+        kernel[i] = (1.0f / (sqrt(2 * lm_pi) * sigma)) * exp(exponent);
+        sum += kernel[i];  // Accumulate the sum for normalization
+    }
+    for (int i = 0; i < kernel_size; ++i) {
+        kernel[i] /= sum;
+    }
+    return kernel;
+}
+
+void blurFilter(Image* outImage, const Image* real, float sigma){
+    float* kernel = generateBlurkernel(sigma);
+    long kernel_size = 2 * blur_radius + 1;
+    for (long ir = 0; ir < real->image_height; ir++) {
+        for (long ic = 0; ic < real->image_width; ic++) {
+            float redAcc = 0.0f, greenAcc = 0.0f, blueAcc = 0.0f;
+            for (long k = 0; k < kernel_size; ++k) {
+                long pixelCol = clampl(ic + k - blur_radius, 0L, static_cast<long>(real->image_width - 1));
+                vec3 pixel;
+                image_get(pixel,real,ir,pixelCol);
+                float blurWeight = kernel[k];
+                redAcc += pixel[0] * blurWeight;
+                greenAcc += pixel[1]* blurWeight;
+                blueAcc += pixel[2] * blurWeight;
+            }
+            vec3 out;
+            out[0] = fmaxf(0.0f, fminf(1.f, redAcc));
+            out[1] = fmaxf(0.0f, fminf(1.f, greenAcc));
+            out[2] = fmaxf(0.0f, fminf(1.f, blueAcc));
+            image_set(outImage, ir, ic, out);
+        }
+    }
+    delete[] kernel;
+}
+
 void render_image_effects(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng) {
     (void)gradient;
     Image scratch = make_image(real->image_width, real->image_height);
     render_image_phong(real, gradient, params, ctx, rng);
-    chromaticAberrationFilter(5, 2, 10, &scratch, real);
+    // chromaticAberrationFilter(5, 2, 10, &scratch, real);
+    float sigma = 1.5f;
+    blurFilter(&scratch, real, sigma);
     image_copy(&scratch, real);
     free_image(&scratch);
 }
