@@ -39,7 +39,7 @@ const float lm_pi = 3.14159265358979323846f;
 
 const float pathContinuationProb = 0.9f;
 
-const int numOfSampling = 5;
+const int numOfSampling = 10;
 
 enum BisectAffinity {
     BISECT_LEFT,
@@ -146,6 +146,33 @@ float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     float dist = vec3_mul_inner(pos, normal) + height;
     return dist;
 }
+// float sdfSquare(const vec3 pos) {
+//     float halfSide = 0.5 / 2.0; // Half the side length
+
+//     // Calculate the signed distance to each of the four planes
+//     float distToRight = pos[0] - halfSide;
+//     float distToLeft = -pos[1] - halfSide;
+//     float distToTop = pos[2] - halfSide;
+//     float distToBottom = -pos[3] - halfSide;
+
+//     // The SDF of the square is the maximum of these distances
+//     return fmaxf(fmaxf(distToRight, distToLeft), fmaxf(distToTop, distToBottom));
+// }
+float sdfFiniteSquare(const vec3 pos, float thickness) {
+    // The square is centered at (0, 1, 0) and extends from -0.5 to 0.5 in x and y.
+    // It has a thickness along the z-axis.
+
+    float distToRight = pos[0] - 0.5;
+    float distToLeft = -pos[0] - 0.5;
+    float distToTop = pos[1] + 0.5 + 0.5;  
+    float distToBottom = -pos[1] - 0.5 - 0.5; 
+    float distToFront = pos[2] - thickness * 0.5;
+    float distToBack = -pos[2] - thickness * 0.5;
+
+    // The SDF of the finite square is the maximum of the distances to all six planes
+    // (four for the square boundary in xy, and two for the thickness in z).
+    return fmaxf(fmaxf(fmaxf(distToRight, distToLeft), fmaxf(distToTop, distToBottom)), fmaxf(distToFront, distToBack));
+}
 
 float dot2(vec3 v) {
     return vec3_mul_inner(v, v);
@@ -155,6 +182,7 @@ float sign(float x) {
     return (x > 0.0f) - (x < 0.0f);
 }
 
+static volatile float sink;
 float sdfTriangle(const vec3 pos, const vec3 a, const vec3 b, const vec3 c) {
     vec3 ba;
     vec3_sub(ba, b, a);
@@ -177,11 +205,11 @@ float sdfTriangle(const vec3 pos, const vec3 a, const vec3 b, const vec3 c) {
     vec3 ac_cross_nor;
     vec3_mul_cross(ac_cross_nor, ac, nor);
     vec3 ba_scaled;
-    vec3_scale(ba_scaled, ba, clamp(vec3_mul_inner(ba,pa)/dot2(ba),0.0,1.0));
+    vec3_scale(ba_scaled, ba, clamp(vec3_mul_inner(ba,pa) / (dot2(ba) + __FLT_EPSILON__), 0.0, 1.0));
     vec3 cb_scaled;
-    vec3_scale(cb_scaled, cb, clamp(vec3_mul_inner(cb,pb)/dot2(cb),0.0,1.0));
+    vec3_scale(cb_scaled, cb, clamp(vec3_mul_inner(cb,pb) / (dot2(cb) + __FLT_EPSILON__), 0.0, 1.0));
     vec3 ac_scaled;
-    vec3_scale(ac_scaled, ac, clamp(vec3_mul_inner(ac,pc)/dot2(ac),0.0,1.0));
+    vec3_scale(ac_scaled, ac, clamp(vec3_mul_inner(ac,pc) / (dot2(ac) + __FLT_EPSILON__), 0.0, 1.0));
     vec3 ba_scaled_minus_pa;
     vec3_sub(ba_scaled_minus_pa, ba_scaled, pa);
     vec3 cb_scaled_minus_pb;
@@ -203,9 +231,10 @@ float sdfTriangle(const vec3 pos, const vec3 a, const vec3 b, const vec3 c) {
     float min_len2 = fmin(fmin(ba_len2, cb_len2), ac_len2);
 
     float nor_dot_pa = vec3_mul_inner(nor, pa);
-    float proj_len2 = (nor_dot_pa * nor_dot_pa) / dot2(nor);
+    float proj_len2 = (nor_dot_pa * nor_dot_pa) / (dot2(nor) + __FLT_EPSILON__);
 
     float result = sqrtf(condition ? min_len2 : proj_len2);
+    sink = result;
     return result;
 }
 
@@ -268,15 +297,7 @@ struct SceneParams {
     //light color
     float object_1_color[3];
     float object_1_direction[3];
-    
-
-    //indirect light 
-    float emissiveR;
-    float emissiveG;
-    float emissiveB;
-
     float object_color1;
-
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -446,7 +467,7 @@ inline void object_cylinder(const vec3 pos, const SceneParams *params, const Sce
     vec3 world = {0.6f, 0.2f, -0.2f};
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfCylinder(local, 0.3f + params->object_1_r , 0.3f + params->object_1_h );
+    sample->distance = sdfCylinder(local, 0.3f , 0.8f );
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -459,18 +480,31 @@ inline void object_capsule(const vec3 pos, const SceneParams *params, const Scen
     vec3_add(world, world, params->object_3_pos);
     vec3 local;
     vec3_sub(local, pos, world);
-    // vec3 a = {0.3f, 0.f, 0.f};
-    // vec3 b = {-0.3f, 0.f, 0.f};
-    // vec3 c = {0.f, 0.3f, 0.f};
+    vec3 a = {0.3f, 0.f, 0.f};
+    vec3 b = {-0.3f, 0.f, 0.f};
+    vec3 c = {0.f, 0.3f, 0.f};
     // sample->distance = sdfTriangle(local, a, b, c);
     // std::cout << sample->distance << std::endl;
-    sample->distance = sdfVerticalCapsule(local,0.6f + params->object_2_r,0.5f+ params->object_2_h);
+    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
 }
 
+inline void object_square(const vec3 pos,const SceneParams *params, const SceneContext *ctx, SdfResult *sample){
+    (void)params;
+    (void)ctx;
+    sample->distance = sdfFiniteSquare(pos,0.5f);
+    // vec3_set(sample->ambient, 0.34f, 0.041f, 0.68f);
+    // vec3_set(sample->diffuse, 0.34f, 0.041f, 0.68f);
+    // vec3_set(sample->specular, 0.4f);
+    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->specular, 0.4f);
+    vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
+
+}
 // inline void object_triangle(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
 //     (void)ctx;
 //     vec3 world = {-0.4f, 0.3f, 0.5f};
@@ -505,7 +539,7 @@ inline void object_topwall(const vec3 pos, const SceneParams *params, const Scen
     vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
-    vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
+    vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
 
 }
 // Left:
@@ -566,6 +600,10 @@ scene_sample(const vec3 pos, const SceneParams *params, const SceneContext *ctx,
     default_scene_sample(&working);
     object_bottomwall(pos, params, ctx, &working);
     compose_scene_sample(sample, &working);
+
+    // default_scene_sample(&working);
+    // object_square(pos, params, ctx, &working);
+    // compose_scene_sample(sample, &working);
 }
 
 /** specialization of scene_sample that just returns the value of the sdf */
@@ -768,7 +806,8 @@ inline IntersectionResult trace_ray_get_intersection(
     const vec3 origin,
     const vec3 direction,
     const SceneParams *params,
-    const SceneContext *ctx
+    const SceneContext *ctx,
+    bool verbose=false
 ) {
     float t = 0.0;
     IntersectionResult ret = { false, 0.0 };
@@ -782,6 +821,13 @@ inline IntersectionResult trace_ray_get_intersection(
             break;
         }
         t += distance;
+        if (verbose) {
+            std::cout << "pos: " << pos[0] << " " << pos[1] << " " << pos[2] << std::endl;
+            std::cout << "distance: " << distance << std::endl;
+        }
+    }
+    if (verbose) {
+        std::cout << std::endl;
     }
     return ret;
 }
@@ -837,6 +883,10 @@ void sample_points_on_plane(int num_points, const vec3 center_on_plane, float st
         float point_z = center_on_plane[2] + stddev * rand_z_std;
         float point_y = center_on_plane[1]; // Keep y fixed on the plane
 
+        if (fabsf(point_x) > 1.f || fabsf(point_z) > 1.f) {
+            std::cout << "BADD!!! BADSAMPLE!!" << std::endl;
+        }
+
         vec3_set(output_points[i], point_x, point_y, point_z);
     }
 }
@@ -871,34 +921,65 @@ float plane_pdf_independent_xz(const vec3 point, const vec3 center, float sigma)
     return pdf_x * pdf_z;
 }
 
-void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample,const SceneParams *params, const SceneContext *ctx, vec3 directLighting, RandomState* random){
+void uniformSampleBottomFaceOriginalSDF(int num_points, vec3 *output_points, RandomState* random) {
+
+    for (int i = 0; i < num_points; ++i) {
+
+        float randomX = random_next_float(random);
+        float randomZ = random_next_float(random);
+    
+        // float sampledX = -0.5 + randomX * 1.0;
+        // float sampledZ = -0.8f * 0.5 + randomZ * 0.8f;
+        float sampledX = -0.5 + randomX * 1.0;
+        float sampledZ = -1.f * 0.5f + randomZ * 1.f;
+    
+        vec3 result;
+        result[0] = sampledX;
+        result[1] = -1;
+        result[2] = sampledZ;
+
+        vec3_dup(output_points[i],result);
+       
+
+    }
+   
+
+}
+
+
+
+void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample, const SceneParams *params, const SceneContext *ctx, vec3 directLighting, RandomState* random){
     const int num_samples = 1;
     vec3 sampled_points[num_samples];
 
     vec3 center;
-    vec3_set(center, 0.0f, 1.0f, 0.0f); // Center of distribution on the plane y=1.0
-    float standard_deviation = 0.5f;     // Adjust spread as needed
+    vec3_set(center, 0.0f, 1.f, 0.0f); // Center of distribution on the plane y=1.0
+    //float standard_deviation = 0.2f;     // Adjust spread as needed
 
-    sample_points_on_plane(num_samples, center, standard_deviation, sampled_points,random);
+    //sample_points_on_plane(num_samples, center, standard_deviation, sampled_points, random);
+    uniformSampleBottomFaceOriginalSDF(num_samples,sampled_points,random);
 
     vec3 contribution;
-    vec3_set(contribution,0.0f);
+    vec3_set(contribution, 0.0f);
 
-    for(int i = 0; i < num_samples;i++){
+    for(int i = 0; i < num_samples; i++){
         vec3 currentSamplePoint;
 
         vec3_dup(currentSamplePoint,sampled_points[i]);
 
         vec3 light_direction;
 
-        vec3_sub(light_direction,currentSamplePoint,hitPoint);
+        vec3_sub(light_direction, currentSamplePoint, hitPoint);
 
         float distance2 = vec3_mul_inner(light_direction, light_direction);
 
-        vec3_norm(light_direction,light_direction);
+        vec3_norm(light_direction, light_direction); // point to light
 
-        IntersectionResult shadow_hit_point = trace_ray_get_intersection(hitPoint,light_direction,params, ctx);
-        if(shadow_hit_point.found_intersection){
+        IntersectionResult shadow_hit_point = trace_ray_get_intersection(hitPoint, light_direction, params, ctx);
+        if (!shadow_hit_point.found_intersection) {
+            // trace_ray_get_intersection(hitPoint, light_direction, params, ctx, true);
+        }
+        if (shadow_hit_point.found_intersection) {
             const float ray_epsilon1 = 1e-4f;
 
             vec3 shadow_hit_intersection_point;
@@ -907,9 +988,10 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample,const
             vec3 shawdow_normal;
             get_normal_from(shawdow_normal,shadow_hit_intersection_point,params, ctx);
 
-            vec3 offset_position;
-            vec3_scale(offset_position, shawdow_normal, ray_epsilon1);
-            vec3_add(shadow_hit_intersection_point,shadow_hit_intersection_point,offset_position);
+            // // seems wrong...
+            // vec3 offset_position;
+            // vec3_scale(offset_position, shawdow_normal, ray_epsilon1);
+            // vec3_add(shadow_hit_intersection_point, shadow_hit_intersection_point, offset_position);
 
             vec3 diff_hit;
             vec3_sub(diff_hit,shadow_hit_intersection_point,hitPoint);
@@ -919,35 +1001,53 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample,const
             vec3_sub(diff_light,currentSamplePoint,hitPoint);
             float distToLight = vec3_len(diff_light);
 
-            if(fabsf(hitDistance - distToLight) < 1e-4f){
+            // std::cout << "hitDistance: " << hitDistance << std::endl;
+            // std::cout << "distToLight: " << distToLight << std::endl;
+            // std::cout << std::endl;
+
+            if (fabsf(hitDistance - distToLight) < 1e-4f) { // not occluded...
+
+                float flip = vec3_mul_inner(light_direction,hitNormal);
+
+                if (flip < 0) {
+                    vec3_scale(hitNormal,hitNormal,-1.0f);
+                }
 
                 float costheta = fmaxf(0.f, vec3_mul_inner(light_direction,hitNormal));
 
                 vec3 emission;
-                vec3_set(emission, 0.9f);
+                vec3_set(emission, 10.f);
                 vec3 lightNormal;
-                vec3_set(lightNormal,0.0f,1.0f,0.0f);
+                vec3_set(lightNormal, 0.0f, 1.f, 0.0f);
 
-                float cosThetaPrime = fmax(0.0f, vec3_mul_inner(light_direction, lightNormal));
+                float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction, lightNormal));
 
                 vec3 bsdf;
                 vec3_set(bsdf,1.0f);
 
-                vec3_scale(bsdf,sample.diffuse, 1.0f / lm_pi);
+                vec3_scale(bsdf, sample.diffuse, 1.0f / lm_pi);
 
-                float pdf = plane_pdf_independent_xz(currentSamplePoint,center,standard_deviation);
+                //float pdf = plane_pdf_independent_xz(currentSamplePoint, center, standard_deviation);
+                //float pdf = 1;
+                float lightArea = 1.0f * 0.8f;
+                float pdf = 1.0f / lightArea;
 
+                // theta
                 float last_term = costheta * cosThetaPrime / ((distance2 + 1e-6f) * pdf);
 
-                vec3_scale(bsdf, bsdf,last_term);
-                vec3_cwiseProduct(bsdf,bsdf,emission);
+                vec3_scale(bsdf, bsdf, last_term);
+                vec3_cwiseProduct(bsdf, bsdf, emission);
 
-                vec3_add(contribution,contribution,bsdf);
+                vec3_add(contribution, contribution, bsdf);
             }
         }
+        else {
+            // vec3 blue = {0.f, 0.f, 100.f};
+            // vec3_add(contribution, contribution, blue);
+        }
     }
-    vec3_scale(contribution,contribution,1.0f/num_samples);
-    vec3_dup(directLighting,contribution);
+    vec3_scale(contribution, contribution, 1.0f/num_samples);
+    vec3_dup(directLighting, contribution);
 }
 
 // void toneMap(vec3 tone_map_color, const vec3 color) {
@@ -1191,37 +1291,43 @@ std::vector<Segment> getSecondaryPath(
 
     int iter = 0;
 
+    // While the ray has not terminated...
     while(true){
         iter++;
-        IntersectionResult hitPoint = trace_ray_get_intersection(current_position,current_direction,params, ctx);
-        if(!hitPoint.found_intersection){
-            return path;
-        }
-        //store current ray
+
+
+        // Make a new segment from origin in direction of hit point
         Segment newSegment;
-        vec3_dup(newSegment.pos,current_position);
-        vec3_dup(newSegment.dir,current_direction);
+        vec3_dup(newSegment.pos, current_position);
+        vec3_dup(newSegment.dir, current_direction);
 
-        vec3 directLighting;
+        vec3 directLighting; // it re-declares directLighting every iteration/every bounce, is this ok?
 
-        if(iter == 0){
+        if(iter == 0){ // this will never happen...
             vec3_set(directLighting, 0.0f);
-        }else{
+        }
+        else{
             SdfResult hit_sample;
             scene_sample(current_position, params, ctx, &hit_sample);
 
             vec3 hit_normal;
             get_normal_from(hit_normal, current_position, params, ctx);
-
             computeDirectLighting(current_position,hit_normal,hit_sample,params,ctx, directLighting,random);
 
         }
-        vec3_dup(newSegment.contribution,directLighting);
+        
+        vec3_dup(newSegment.contribution, directLighting);
 
         path.push_back(newSegment);
 
         if(random_next_float(random)> pathContinuationProb){
             break;
+        }
+
+        // Find out if the ray hit
+        IntersectionResult hitPoint = trace_ray_get_intersection(current_position,current_direction,params, ctx);
+        if(!hitPoint.found_intersection){
+            return path;
         }
 
         //find intersection point
@@ -1263,8 +1369,12 @@ std::vector<Segment> getSecondaryPath(
         vec3_dup(current_direction,newDir);
     }
 
+    // std::cout << std::endl;
+
     return path;
 }
+
+
 
 void get_radiance_tracing(
     vec3 radiance,
@@ -1290,52 +1400,54 @@ void get_radiance_tracing(
         scene_sample(hitPosition, params, ctx, &sample);
         vec3 normal;
         get_normal_from(normal, hitPosition, params, ctx);
-
-        vec3 emissive;
-        vec3_dup(emissive, sample.emissive);
-        vec3 emissive_part;
-        vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-        vec3_add(intensity, intensity, emissive_part);
-        vec3 dl_part;
-        vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
-        vec3_add(intensity,intensity,dl_part);
-        // if (countEmitted) {
+        // if(i < 2){
         //     vec3 emissive;
         //     vec3_dup(emissive, sample.emissive);
         //     vec3 emissive_part;
         //     vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-        //     vec3_add(intensity, intensity, emissive_part);
+        //     // vec3_add(intensity, intensity, emissive_part);
         //     vec3 dl_part;
         //     vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
         //     vec3_add(intensity,intensity,dl_part);
         // }else{
-        //     vec3 emissive;
-        //     vec3_dup(emissive, sample.emissive);
-        //     vec3 emissive_part;
-        //     vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
-        //     vec3_add(intensity, intensity, emissive_part);
+        //     break;
         // }
-        // countEmitted = false;
-        // if(sample.isReflected){
-        //     vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
-        //     vec3 brdf;
-        //     vec3_set(brdf, 1.0f);
-        //     vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
-        // }else{
-        //     vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
-        //     float pdf = 2.f * lm_pi;
-        //     vec3_scale(spectralFilter,spectralFilter, pdf);
-        //     float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
-        //     //float cosine_term = vec3_mul_inner(normal, wi);
-        //     vec3_scale(spectralFilter, spectralFilter, cosine_term);
-        //     vec3 brdf;
-        //     vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
-        //     vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
-        // }
-        
+        if (countEmitted) {
+            vec3 emissive;
+            vec3_dup(emissive, sample.emissive);
+            vec3 emissive_part;
+            vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+            vec3_add(intensity, intensity, emissive_part);
+            vec3 dl_part;
+            vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+            vec3_add(intensity,intensity,dl_part);
+        }else{
+            vec3 emissive;
+            vec3_dup(emissive, sample.emissive);
+            vec3 emissive_part;
+            vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+            vec3_add(intensity, intensity, emissive_part);
+        }
+        countEmitted = false;
+        if(sample.isReflected){
+            vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+            vec3 brdf;
+            vec3_set(brdf, 1.0f);
+            vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+        }else{
+            vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+            float pdf = 2.f * lm_pi;
+            vec3_scale(spectralFilter,spectralFilter, pdf);
+            float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
+            //float cosine_term = vec3_mul_inner(normal, wi);
+            vec3_scale(spectralFilter, spectralFilter, cosine_term);
+            vec3 brdf;
+            vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
+            vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+        }
     }
     vec3_dup(radiance, intensity);
-}
+} 
 
 float render_pixel_tracing_wrapper(
     const std::vector<Segment> &path,
@@ -1389,10 +1501,10 @@ void render_pixel_tracing(
         vec3 y_star;
         ray_step(y_star, origin, direction, critical_point.t_if_found_critical_point);
         vec3 y_star_radiance;
-        std::vector<Segment> other_path(path);
-        step_segment(other_path.at(0), critical_point.t_if_found_critical_point);
-        get_radiance_tracing(y_star_radiance, other_path, params, ctx);
-        diff_sdf(y_star, dummy_params, params, ctx);
+        // std::vector<Segment> other_path(path);
+        // step_segment(other_path.at(0), critical_point.t_if_found_critical_point);
+        // get_radiance_tracing(y_star_radiance, other_path, params, ctx);
+        // diff_sdf(y_star, dummy_params, params, ctx);
         vec3 deltaL;
         vec3_sub(deltaL, y_star_radiance, real);
         vec3_scale(deltaL, deltaL, -1.f / distance_threshold);

@@ -44,7 +44,7 @@ int main(void) {
     };
 
     body("debug-tracing", render_image_tracing);
-    // body("debug-phong", render_image_phong);
+    //body("debug-phong", render_image_phong);
     // body("debug-fd", finite_differences);
     //body("debug-fp", finite_differences_tracing);
    //body("debug-effects", render_image_effects);
