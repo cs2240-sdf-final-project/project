@@ -37,7 +37,7 @@ const float lm_pi = 3.14159265358979323846f;
 
 const float pathContinuationProb = 0.9f;
 
-const int numberOfSampling = 20;
+const int numberOfSampling = 10;
 
 const int radius = 5;
 
@@ -826,7 +826,20 @@ float plane_pdf_independent_xz(const vec3 point, const vec3 center, float sigma)
 
 
 
+void toneMap(vec3 tone_map_color, const vec3 color) {
+    float luminance = vec3_mul_inner(color, (vec3){0.2126f, 0.7152f, 0.0722f});
 
+    // Reinhard Tone Mapping
+    float toneMappedLuminance = luminance / (1.0f + luminance);
+
+    // Scale the color channels by the tone-mapped luminance
+    if (luminance > 1e-6f) { // Avoid division by zero
+        float scale = toneMappedLuminance / luminance;
+        vec3_scale(tone_map_color, color, scale);
+    } else {
+        vec3_dup(tone_map_color, color);
+    }
+}
 
 void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult sample,const SceneParams *params, vec3 directLighting, RandomState* random){
 
@@ -891,8 +904,8 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
                 vec3 lightNormal;
                 vec3_set(lightNormal,0.0f,1.0f,0.0f);
 
-                //float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction,lightNormal));
-                float cosThetaPrime = fmax(0.0f, vec3_mul_inner(light_direction, lightNormal));
+                float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction,lightNormal));
+                //float cosThetaPrime = fmax(0.0f, vec3_mul_inner(light_direction, lightNormal));
                 
 
                 vec3 bsdf;
@@ -905,8 +918,8 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
 
                 //printf("costheta: %f\n", costheta);
                 //printf("cosThetaPrime: %f\n", cosThetaPrime);
-                // printf("distance2: %f\n", distance2);
-                // printf("pdf: %f\n", pdf);
+                //printf("distance2: %f\n", distance2);
+                //printf("pdf: %f\n", pdf);
 
                 
 
@@ -918,24 +931,34 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, vec3 rayDir, SdfResult
                 vec3_scale(bsdf, bsdf,last_term);
                 vec3_cwiseProduct(bsdf,bsdf,emission);
 
+                bsdf[0] = clamp(bsdf[0], 0.0f,1.f);
+                bsdf[1] = clamp(bsdf[1], 0.0f,1.f);
+                bsdf[2] = clamp(bsdf[2], 0.0f,1.f);
+
+
                 vec3_add(contribution,contribution,bsdf);
 
-            
+                
+
+                //printf("Emission: %f, %f, %f\n", emission[0], emission[1], emission[2]);
+
+                //printf("BSDF: %f, %f, %f\n", bsdf[0], bsdf[1], bsdf[2]);
+                //printf("Contribution 1 : %f, %f, %f\n", contribution[0], contribution[1], contribution[2]);
 
 
             }
 
             
-
-
             
         }
-       
-
    
     }
+    
+
     vec3_scale(contribution,contribution,1.0f/num_samples);
-    vec3_dup(directLighting,contribution);
+    //printf("Contribution: %f, %f, %f\n", contribution[0], contribution[1], contribution[2]);
+    //vec3_dup(directLighting,contribution);
+    toneMap(directLighting,contribution);
 
 
 }
@@ -982,6 +1005,11 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
 
         }
         vec3_dup(newSegment.contribution,directLighting);
+        // if(newSegment.contribution[0] != 0.f ||newSegment.contribution[1] != 0.f ||newSegment.contribution[2] != 0.f  ){
+
+        //     printf("Contribution 4 : %f, %f, %f\n", newSegment.contribution[0], newSegment.contribution[1], newSegment.contribution[2]);
+
+        // }
 
         //vec3_set(newSegment.contribution,0.0f);
     
@@ -1044,20 +1072,7 @@ std::vector<Segment> getSecondaryPath(vec3 origin, vec3 direction,RandomState *r
     
 }
 
-void toneMap(vec3 tone_map_color, const vec3 color) {
-    float luminance = vec3_mul_inner(color, (vec3){0.2126f, 0.7152f, 0.0722f});
 
-    // Reinhard Tone Mapping
-    float toneMappedLuminance = luminance / (1.0f + luminance);
-
-    // Scale the color channels by the tone-mapped luminance
-    if (luminance > 1e-6f) { // Avoid division by zero
-        float scale = toneMappedLuminance / luminance;
-        vec3_scale(tone_map_color, color, scale);
-    } else {
-        vec3_dup(tone_map_color, color);
-    }
-}
 
 void gammaCorrect(vec3 gamma_correct_color, const vec3 color) {
     float gamma = 2.2f;
@@ -1079,7 +1094,7 @@ void get_radiance_at(
 ) {
     
     bool directlightOnly =false;
-    bool countEmitted = true;
+    bool countEmitted = false;
     vec3 spectralFilter;
 
     vec3_set(spectralFilter, 1.f);
@@ -1099,6 +1114,19 @@ void get_radiance_at(
             vec3_dup(wi,path[i+1].dir);
             vec3 direct_light;
             vec3_dup(direct_light,path[i+1].contribution);
+
+            direct_light[0] = fminf(fmaxf(direct_light[0], 0.0f), 1.0f); // Clamp red channel to [0, 1]
+            direct_light[1] = fminf(fmaxf(direct_light[1], 0.0f), 1.0f); // Clamp green channel to [0, 1]
+            direct_light[2] = fminf(fmaxf(direct_light[2], 0.0f), 1.0f); // Clamp blue channel to [0, 1]
+
+            
+
+            // if(direct_light[0] != 0.f ||direct_light[1] != 0.f ||direct_light[2] != 0.f  ){
+
+            //     printf("Contribution 4 : %f, %f, %f\n", 
+            //         direct_light[0], direct_light[1], direct_light[2]);
+
+            // }
           
     
 
@@ -1109,66 +1137,76 @@ void get_radiance_at(
             vec3 normal;
             get_normal_from(normal, hitPosition, params);
 
+            vec3 emissive;
+            vec3_dup(emissive, sample.emissive);
+    
+            vec3 emissive_part;
+            vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+            
+            vec3_add(intensity, intensity, emissive_part);
+
+            vec3 dl_part;
+            vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+            vec3_add(intensity,intensity,dl_part);
+
             
                         
-            if (countEmitted) {
-                vec3 emissive;
-                vec3_dup(emissive, sample.emissive);
+            // if (countEmitted) {
+            //     vec3 emissive;
+            //     vec3_dup(emissive, sample.emissive);
     
-                vec3 emissive_part;
-                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+            //     vec3 emissive_part;
+            //     vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
             
-                vec3_add(intensity, intensity, emissive_part);
+            //     vec3_add(intensity, intensity, emissive_part);
 
-                vec3 dl_part;
-                vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
-                vec3_add(intensity,intensity,dl_part);
+            //     vec3 dl_part;
+            //     vec3_cwiseProduct(dl_part,direct_light,spectralFilter);
+            //     vec3_add(intensity,intensity,dl_part);
 
-            }else{
-                vec3 emissive;
-                vec3_dup(emissive, sample.emissive);
+            // }else{
+            //     vec3 emissive;
+            //     vec3_dup(emissive, sample.emissive);
     
-                vec3 emissive_part;
-                vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
+            //     vec3 emissive_part;
+            //     vec3_cwiseProduct(emissive_part, emissive, spectralFilter);
             
-                vec3_add(intensity, intensity, emissive_part);
+            //     vec3_add(intensity, intensity, emissive_part);
 
-            }
-            countEmitted = false;
+            // }
+            // countEmitted = false;
             
 
         
 
-            if(sample.isReflected){
-                vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
-                vec3 brdf;
-                vec3_set(brdf, 1.0f);
-                vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+            // if(sample.isReflected){
+            //     vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+            //     vec3 brdf;
+            //     vec3_set(brdf, 1.0f);
+            //     vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
 
 
-            }else{
-                vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
+            // }else{
+            //     vec3_scale(spectralFilter,spectralFilter, 1.0f / pathContinuationProb);
       
 
-                float pdf = 2.f * lm_pi;
-                vec3_scale(spectralFilter,spectralFilter, pdf);
+            //     float pdf = 2.f * lm_pi;
+            //     vec3_scale(spectralFilter,spectralFilter, pdf);
 
-                float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
-                    //float cosine_term = vec3_mul_inner(normal, wi);
-                vec3_scale(spectralFilter, spectralFilter, cosine_term);
+            //     float cosine_term = fmaxf(0.f, vec3_mul_inner(normal, wi));
+            //         //float cosine_term = vec3_mul_inner(normal, wi);
+            //     vec3_scale(spectralFilter, spectralFilter, cosine_term);
 
-                vec3 brdf;
-                vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
-                vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
+            //     vec3 brdf;
+            //     vec3_scale(brdf, sample.diffuse, 1.0f / lm_pi);
+            //     vec3_cwiseProduct(spectralFilter, spectralFilter, brdf);
                 
 
-            }
+            // }
             
 
                 
-            
-             
-
+        
 
         }
         // if(directlightOnly){
@@ -1190,6 +1228,12 @@ void get_radiance_at(
     // gammaCorrect(gamma_corrected_color, tone_mapped_color);
 
     // vec3_dup(radiance, gamma_corrected_color);
+
+    // if(contribution[0] != 0.f ||contribution[1] != 0.f ||contribution[2] != 0.f  ){
+
+    //     printf("Contribution 4 : %f, %f, %f\n", contribution[0], contribution[1], contribution[2]);
+
+    // }
 
     vec3_dup(radiance, intensity);
 
@@ -1812,12 +1856,12 @@ void render_image(Image *real, GradientImage *gradient, const SceneParams *param
     }
 
 
-    Image outImage = make_image(real->image_width, real->image_height);
+    //Image outImage = make_image(real->image_width, real->image_height);
 
     //edgeDetectionFilterPixel(real,&outImage,params,0.8f);
     //chromaticAberrationFilter(-10,10,20,&outImage,real,params);
 
-    blurFilter(&outImage, real, 3.f);
+    //blurFilter(&outImage, real, 3.f);
 
    
 }
