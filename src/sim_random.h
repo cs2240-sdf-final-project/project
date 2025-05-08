@@ -21,6 +21,5 @@ long sample_binomial(float prob, RandomState *rng);
 
 void sample_hemisphere(vec3 out, const vec3 normal, RandomState *rng);
 
-float generate_normal_random(RandomState* random);
-
+void generate_normal_random(RandomState* random, float *out_1, float *out_2);
 #endif

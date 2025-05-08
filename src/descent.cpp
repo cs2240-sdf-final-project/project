@@ -1,10 +1,12 @@
 #include <stdio.h>
+#include <algorithm>
 #include <assert.h>
 #include <stdlib.h>
 #include <math.h>
 #include <sys/stat.h>
 
-#include "hello.h"
+#include "render.h"
+#include "params.h"
 #include "sim_random.h"
 
 float gradient_scaling_factor(long image_width, long image_height) {
@@ -14,8 +16,11 @@ float gradient_scaling_factor(long image_width, long image_height) {
 
 float mse_loss(const Image *real, const Image *groundtruth) {
     float loss = 0.f;
-    for (long ir = 0; ir < real->image_height; ir++) {
-        for (long ic = 0; ic < real->image_width; ic++) {
+    long image_width, image_height;
+    image_fetch_dims(real, &image_width, &image_height);
+
+    for (long ir = 0; ir < image_height; ir++) {
+        for (long ic = 0; ic < image_width; ic++) {
             vec3 radiance_groundtruth;
             vec3 radiance_real;
             image_get(radiance_groundtruth, groundtruth, ir, ic);
@@ -27,43 +32,41 @@ float mse_loss(const Image *real, const Image *groundtruth) {
             loss += squared_error_avg;
         }
     }
-    return loss * gradient_scaling_factor(real->image_width, real->image_height);
+    return loss * gradient_scaling_factor(image_width, image_height);
 }
 
 void mse_loss_deriv(const Image *real, const Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv) {
     scene_params_fill(loss_deriv, 0.0);
+    SceneParamsPerChannel *ppc = make_ppc();
 
-    SceneParamsPerChannel ppc;
-    for (int c = 0; c < 3; c++) {
-        ppc.rgb[c] = uninit_scene_params();
-    }
+    long image_width, image_height;
+    image_fetch_dims(real, &image_width, &image_height);
 
-    float factor = gradient_scaling_factor(real->image_width, real->image_height);
+    float factor = gradient_scaling_factor(image_width, image_height);
 
-    for (long ir = 0; ir < real->image_height; ir++) {
-        for (long ic = 0; ic < real->image_width; ic++) {
+    for (long ir = 0; ir < image_height; ir++) {
+        for (long ic = 0; ic < image_width; ic++) {
             vec3 pixel_groundtruth;
             vec3 pixel_real;
 
             image_get(pixel_groundtruth, groundtruth, ir, ic);
             image_get(pixel_real, real, ir, ic);
 
-            gradient_image_get(&ppc, gradient, ir, ic);
+            gradient_image_get(ppc, gradient, ir, ic);
 
             vec3 error;
             vec3_sub(error, pixel_real, pixel_groundtruth);
             vec3_scale(error, error, factor * 2.0f);
 
+            ppc_scale(ppc, error);
             for (int ch = 0; ch < 3; ch++) {
-                scene_params_scale(ppc.rgb[ch], ppc.rgb[ch], error[ch]);
-                scene_params_elementwise_add(loss_deriv, loss_deriv, ppc.rgb[ch]);
+                SceneParams *channel = index_channel(ppc, ch);
+                scene_params_elementwise_add(loss_deriv, loss_deriv, channel);
             }
         }
     }
 
-    for (int ch = 0; ch < 3; ch++) {
-        free_scene_params(ppc.rgb[ch]);
-    }
+    free_ppc(ppc);
 }
 
 float total_loss(const Image *real, const Image *groundtruth, const SceneParams *params) {
@@ -74,6 +77,7 @@ float total_loss(const Image *real, const Image *groundtruth, const SceneParams 
 
 void total_loss_deriv(const Image *real, Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv_out, SceneParams *scratch, const SceneParams *params) {
     scene_consistency_gradient(params, scratch);
+    scene_params_scale(scratch, scratch, 1e-2f);
     mse_loss_deriv(real, groundtruth, gradient, loss_deriv_out);
     scene_params_elementwise_add(loss_deriv_out, loss_deriv_out, scratch);
 }
@@ -94,10 +98,10 @@ int main(void) {
 
     long image_width = 500;
     long image_height = 500;
-    Image real = make_image(image_width, image_height);
-    GradientImage gradient = make_gradient_image(image_width, image_height);
-    Image groundtruth = make_image(image_width, image_height);
-    image_read_bpm(&groundtruth, fgroundtruth);
+    Image *real = make_image(image_width, image_height);
+    GradientImage *gradient = make_gradient_image(image_width, image_height);
+    Image *groundtruth = make_image(image_width, image_height);
+    image_read_bpm(groundtruth, fgroundtruth);
 
     SceneContext *ctx = make_scene_context();
 
@@ -107,20 +111,22 @@ int main(void) {
     SceneParams *loss_deriv = uninit_scene_params();
     SceneParams *scratch = uninit_scene_params();
 
-    const float learning_rate = 1e-1f;
+    const float learning_rate = 1e+0f;
 
     const int num_epochs = 1000;
     for (int epoch = 0; epoch < num_epochs; epoch++) {
-        render_image_phong(&real, &gradient, params,ctx, rng); // calculate radiance and gradients
+        // render_image_phong(&real, &gradient, params,ctx, rng); // calculate radiance and gradients
+        render_image_phong(real, gradient, params,ctx, rng); // calculate radiance and gradients
 
         // Compute loss and derivative of loss
-        float loss = total_loss(&real, &groundtruth, params);
-        total_loss_deriv(&real, &groundtruth, &gradient, loss_deriv, scratch, params);
+        float loss = total_loss(real, groundtruth, params);
+        total_loss_deriv(real, groundtruth, gradient, loss_deriv, scratch, params);
 
         printf("%4d loss: %f\n", epoch, loss);
         fflush(stdout);
         printf("deriv"); // TODO: print this struct
-        for (int p = 0; p < number_of_scene_params; p++) {
+        long num_to_print = std::min((long)number_of_scene_params, 30l);
+        for (long p = 0; p < num_to_print; p++) {
             printf("%f ", scene_parameter_get(loss_deriv, p)); // TODO: print this struct
         }
         printf("\n"); // TODO: print this struct
@@ -133,7 +139,7 @@ int main(void) {
         char fn_real[256];
         snprintf(fn_real, sizeof(fn_real), "descent-sequence/real_%04d.ppm", epoch);
         FILE *freal = fopen(fn_real, "w");
-        image_write_ppm(&real, freal);
+        image_write_ppm(real, freal);
         fclose(freal);
     }
 
@@ -142,8 +148,8 @@ int main(void) {
     free_scene_params(loss_deriv);
     free_scene_params(params);
     free_scene_context(ctx);
-    free_image(&real);
-    free_gradient_image(&gradient);
-    free_image(&groundtruth);
+    free_image(real);
+    free_gradient_image(gradient);
+    free_image(groundtruth);
     fclose(fgroundtruth);
 }
