@@ -33,7 +33,7 @@ const int number_of_steps = 1'000;
 // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
 const float contact_threshold = 1e-4f;
 // width of the scene band
-const float distance_threshold = 1e-2f;
+const float distance_threshold = 5e-2f;
 
 const float lm_pi = 3.14159265358979323846f;
 
@@ -146,18 +146,30 @@ float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     float dist = vec3_mul_inner(pos, normal) + height;
     return dist;
 }
-// float sdfSquare(const vec3 pos) {
-//     float halfSide = 0.5 / 2.0; // Half the side length
+float sdfSquare(const vec3 pos, const vec3 center) {
 
-//     // Calculate the signed distance to each of the four planes
-//     float distToRight = pos[0] - halfSide;
-//     float distToLeft = -pos[1] - halfSide;
-//     float distToTop = pos[2] - halfSide;
-//     float distToBottom = -pos[3] - halfSide;
+    vec3 displaced_pos;
+    vec3_sub(displaced_pos,pos,center);
+    // Distance to the sides of the square in the xz-plane
+    float halfSide = 0.5;
+    float halfThickness = 0.5f / 2.0f;
 
-//     // The SDF of the square is the maximum of these distances
-//     return fmaxf(fmaxf(distToRight, distToLeft), fmaxf(distToTop, distToBottom));
-// }
+    // Distance to the sides of the square in the xz-plane
+    float distToRight = displaced_pos[0] - halfSide;
+    float distToLeft = -displaced_pos[0] - halfSide;
+    float distToFront = displaced_pos[2];
+    float distToBack = -displaced_pos[2];
+
+    // Distance to the top and bottom planes (along the y-axis)
+    float distToTop = displaced_pos[1] - halfThickness;
+    float distToBottom = -displaced_pos[1] - halfThickness;
+
+    // The SDF is the maximum of these distances
+    return fmaxf(fmaxf(fmaxf(distToRight, distToLeft), fmaxf(distToFront, distToBack)), fmaxf(distToTop, distToBottom));
+  
+}
+
+
 float sdfFiniteSquare(const vec3 pos, float thickness) {
     // The square is centered at (0, 1, 0) and extends from -0.5 to 0.5 in x and y.
     // It has a thickness along the z-axis.
@@ -467,7 +479,7 @@ inline void object_cylinder(const vec3 pos, const SceneParams *params, const Sce
     vec3 world = {0.6f, 0.2f, -0.2f};
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfCylinder(local, 0.3f , 0.8f );
+    sample->distance = sdfCylinder(local, 0.3f + params->object_2_r , 0.8f + params->object_2_h );
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -485,7 +497,7 @@ inline void object_capsule(const vec3 pos, const SceneParams *params, const Scen
     vec3 c = {0.f, 0.3f, 0.f};
     // sample->distance = sdfTriangle(local, a, b, c);
     // std::cout << sample->distance << std::endl;
-    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
+    sample->distance = sdfVerticalCapsule(local, 0.3f + params->object_1_r, 0.5f + params->object_1_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
@@ -503,6 +515,21 @@ inline void object_square(const vec3 pos,const SceneParams *params, const SceneC
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
     vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
+
+}
+
+inline void object_square_demo(const vec3 pos,const SceneParams *params, const SceneContext *ctx, SdfResult *sample){
+    (void)params;
+    (void)ctx;
+    vec3 squareCenter; 
+    vec3_set(squareCenter,0.0f,0.8f,0.8f);
+    sample->distance = sdfSquare(pos,squareCenter);
+    vec3_set(sample->ambient, 0.34f, 0.041f, 0.68f);
+    vec3_set(sample->diffuse, 0.34f, 0.041f, 0.68f);
+    vec3_set(sample->specular, 0.4f);
+
+    vec3_set(sample->specular, 0.4f);
+    //vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
 
 }
 // inline void object_triangle(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
@@ -602,7 +629,7 @@ scene_sample(const vec3 pos, const SceneParams *params, const SceneContext *ctx,
     compose_scene_sample(sample, &working);
 
     // default_scene_sample(&working);
-    // object_square(pos, params, ctx, &working);
+    // object_square_demo(pos, params, ctx, &working);
     // compose_scene_sample(sample, &working);
 }
 
@@ -696,6 +723,7 @@ void search_for_critical_point(
     // we will bisect this many iterations in order to find the true location of the minimum directional derivative
     const int extensive_depth = 12;
     CriticalPointContext context;
+    context.ctx = ctx;
     vec3_dup(context.origin, origin);
     vec3_dup(context.direction, direction);
     context.params = params;
@@ -1201,8 +1229,12 @@ void render_pixel_phong(
     const SceneParams *params,
     const SceneContext *ctx
 ) {
-    IntersectionResult intersection = trace_ray_get_intersection(origin, direction, params, ctx);
-    get_radiance_phong(real, &intersection, origin, direction, params, ctx);
+    IntersectionResult intersection = 
+    trace_ray_get_intersection(origin, direction,
+                             params, ctx);
+    get_radiance_phong(real, 
+        &intersection, origin, 
+        direction, params, ctx);
 }
 
 void render_gradient_phong(
@@ -1819,7 +1851,7 @@ void finite_differences(Image *real, GradientImage *gradient, const SceneParams 
 }
 void finite_differences_tracing(Image *real, GradientImage *gradient, const SceneParams *params, const SceneContext *ctx, RandomState *rng){
     (void)rng;
-    const float half_epsilon = 2e-1f;
+    const float half_epsilon = 1e-1f;
 
     Renderer *renderer = make_renderer(real->image_width, real->image_height);
     #pragma omp parallel for
@@ -2052,3 +2084,5 @@ void render_image_effects(Image *real, GradientImage *gradient, const SceneParam
     image_copy(&scratch, real);
     free_image(&scratch);
 }
+
+
