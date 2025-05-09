@@ -33,7 +33,7 @@ const int number_of_steps = 1'000;
 // if our sdf gets smaller than this amount, we will consider it an intersection with the surface
 const float contact_threshold = 1e-4f;
 // width of the scene band
-const float distance_threshold = 1e-2f;
+const float distance_threshold = 6e-3f;
 
 const float lm_pi = 3.14159265358979323846f;
 
@@ -209,6 +209,20 @@ float sdfTriangle(const vec3 pos, const vec3 a, const vec3 b, const vec3 c) {
     return result;
 }
 
+float sdfFiniteSquare(const vec3 pos, float thickness) {
+    // The square is centered at (0, 1, 0) and extends from -0.5 to 0.5 in x and y.
+    // It has a thickness along the z-axis.
+    float distToRight = pos[0] - 0.5;
+    float distToLeft = -pos[0] - 0.5;
+    float distToTop = pos[1] + 0.5 + 0.5;   // Top edge at y = 1.5
+    float distToBottom = -pos[1] - 0.5 - 0.5; // Bottom edge at y = 0.5
+    float distToFront = pos[2] - thickness * 0.5;
+    float distToBack = -pos[2] - thickness * 0.5;
+    // The SDF of the finite square is the maximum of the distances to all six planes
+    // (four for the square boundary in xy, and two for the thickness in z).
+    return fmaxf(fmaxf(fmaxf(distToRight, distToLeft), fmaxf(distToTop, distToBottom)), fmaxf(distToFront, distToBack));
+}
+
 float sdfTriPrism(const vec3 origin, float h0, float h1) {
     //h[0] represents half the length of the base of the triangular prism
     //h[1] represents half the height of the prism along the z-axis
@@ -251,24 +265,19 @@ void free_scene_context(SceneContext *ctx) {
 }
 
 struct SceneParams {
-    float object_3_pos[3];
+    // Object params
+    float object_capsule_pos[3];
+    float object_cylinder_pos[3];
     float color[3];
-    float h1, h2;
-    float object_1_x;
-    float object_1_y;
-    float object_1_z;
-    float object_1_r;
-    float object_1_h;
-    float object_2_x;
-    float object_2_y;
-    float object_2_z;
-    float object_2_r;
-    float object_2_h;
+    float object_cylinder_r;
+    float object_cyliner_h;
+    float object_capsule_r;
+    float object_capsule_h;
+    mat4x4 object_transf;
 
     //light color
-    float object_1_color[3];
-    float object_1_direction[3];
-    float object_color1;
+    float light_color[3];
+    float light_direction[3];
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -435,10 +444,11 @@ inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
 inline void object_cylinder(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)params;
     (void)ctx;
-    vec3 world = {0.6f, 0.2f, -0.2f};
+    vec3 world = {0.5f, 0.1f, -0.1f};
+    vec3_add(world, world, params->object_cylinder_pos);
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfCylinder(local, 0.3f , 0.8f );
+    sample->distance = sdfCylinder(local, 0.2f + params->object_cylinder_r, 0.4f + params->object_cyliner_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
@@ -447,8 +457,8 @@ inline void object_cylinder(const vec3 pos, const SceneParams *params, const Sce
 }
 inline void object_capsule(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)ctx;
-    vec3 world = {-0.4f, 0.3f, 0.5f};
-    vec3_add(world, world, params->object_3_pos);
+    vec3 world = {-0.3f, 0.4f, 0.7f};
+    vec3_add(world, world, params->object_capsule_pos);
     vec3 local;
     vec3_sub(local, pos, world);
     vec3 a = {0.3f, 0.f, 0.f};
@@ -456,7 +466,7 @@ inline void object_capsule(const vec3 pos, const SceneParams *params, const Scen
     vec3 c = {0.f, 0.3f, 0.f};
     // sample->distance = sdfTriangle(local, a, b, c);
     // std::cout << sample->distance << std::endl;
-    sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f);
+    sample->distance = sdfVerticalCapsule(local, 0.4f + params->object_capsule_r, 0.6f + params->object_capsule_h);
     vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
     vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
     //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
@@ -532,6 +542,16 @@ inline void object_bottomwall(const vec3 pos, const SceneParams *params, const S
     //sample->isReflected = true;
 }
 
+inline void object_square(const vec3 pos,const SceneParams *params, const SceneContext *ctx, SdfResult *sample){
+    (void)params;
+    (void)ctx;
+    sample->distance = sdfFiniteSquare(pos,0.5f);
+    vec3_set(sample->ambient, 0.34f, 0.041f, 0.68f);
+    vec3_set(sample->diffuse, 0.34f, 0.041f, 0.68f);
+    vec3_set(sample->specular, 0.4f);
+    vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
+}
+
 inline __attribute__((always_inline)) void
 scene_sample(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     default_scene_sample(sample);
@@ -557,6 +577,10 @@ scene_sample(const vec3 pos, const SceneParams *params, const SceneContext *ctx,
     default_scene_sample(&working);
     object_bottomwall(pos, params, ctx, &working);
     compose_scene_sample(sample, &working);
+
+    // default_scene_sample(&working);
+    // object_square(pos, params, ctx, &working);
+    // compose_scene_sample(sample, &working);
 }
 
 /** specialization of scene_sample that just returns the value of the sdf */
@@ -649,6 +673,7 @@ void search_for_critical_point(
     // we will bisect this many iterations in order to find the true location of the minimum directional derivative
     const int extensive_depth = 12;
     CriticalPointContext context;
+    context.ctx = ctx;
     vec3_dup(context.origin, origin);
     vec3_dup(context.direction, direction);
     context.params = params;
@@ -727,14 +752,14 @@ inline void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, con
     for (int l = 0; l < 3; l++) {
         vec3 lightColor;
         vec3_dup(lightColor, lightColors[l]);
-        lightColor[0] += params->object_1_color[0];
-        lightColor[1] += params->object_1_color[1];
-        lightColor[2] += params->object_1_color[2];
+        lightColor[0] += params->light_color[0];
+        lightColor[1] += params->light_color[1];
+        lightColor[2] += params->light_color[2];
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
-        light_dir[0] += params->object_1_direction[0];
-        light_dir[1] += params->object_1_direction[1];
-        light_dir[2] += params->object_1_direction[2];
+        light_dir[0] += params->light_direction[0];
+        light_dir[1] += params->light_direction[1];
+        light_dir[2] += params->light_direction[2];
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
 
 
@@ -874,31 +899,130 @@ float plane_pdf_independent_xz(const vec3 point, const vec3 center, float sigma)
     return pdf_x * pdf_z;
 }
 
+// void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample, const SceneParams *params, const SceneContext *ctx, vec3 directLighting, RandomState* random){
+//     const int num_samples = 1;
+//     vec3 sampled_points[num_samples];
+
+//     vec3 center;
+//     vec3_set(center, 0.0f, 1.f, 0.0f); // Center of distribution on the plane y=1.0
+//     float standard_deviation = 0.2f;     // Adjust spread as needed
+
+//     sample_points_on_plane(num_samples, center, standard_deviation, sampled_points, random);
+
+//     vec3 contribution;
+//     vec3_set(contribution, 0.0f);
+
+//     for(int i = 0; i < num_samples; i++){
+//         vec3 currentSamplePoint;
+
+//         vec3_dup(currentSamplePoint,sampled_points[i]);
+
+//         vec3 light_direction;
+
+//         vec3_sub(light_direction, currentSamplePoint, hitPoint);
+
+//         float distance2 = vec3_mul_inner(light_direction, light_direction);
+
+//         vec3_norm(light_direction, light_direction); // point to light
+
+//         // std::cout << "light position: " << currentSamplePoint[0] << ", " << currentSamplePoint[1] << ", " << currentSamplePoint[2] << std::endl;
+//         // std::cout << "light_direction: " << light_direction[0] << ", " << light_direction[1] << ", " << light_direction[2] << std::endl;
+
+//         IntersectionResult shadow_hit_point = trace_ray_get_intersection(hitPoint, light_direction, params, ctx); 
+
+//         if (shadow_hit_point.found_intersection) {
+//             const float ray_epsilon1 = 1e-4f;
+
+//             vec3 shadow_hit_intersection_point;
+//             ray_step(shadow_hit_intersection_point, hitPoint, light_direction, shadow_hit_point.intersection_t);
+
+//             vec3 shawdow_normal;
+//             get_normal_from(shawdow_normal,shadow_hit_intersection_point,params, ctx);
+
+//             // // seems wrong...
+//             // vec3 offset_position;
+//             // vec3_scale(offset_position, shawdow_normal, ray_epsilon1);
+//             // vec3_add(shadow_hit_intersection_point, shadow_hit_intersection_point, offset_position);
+
+//             vec3 diff_hit;
+//             vec3_sub(diff_hit,shadow_hit_intersection_point,hitPoint);
+//             float hitDistance = vec3_len(diff_hit);
+
+//             vec3 diff_light;
+//             vec3_sub(diff_light,currentSamplePoint,hitPoint);
+//             float distToLight = vec3_len(diff_light);
+
+//             if (fabsf(hitDistance - distToLight) < 1e-4f) { // not occluded...
+
+//                 float costheta = fmaxf(0.f, vec3_mul_inner(light_direction,hitNormal));
+
+//                 vec3 emission;
+//                 vec3_set(emission, 15.f);
+//                 vec3 lightNormal;
+//                 vec3_set(lightNormal, 0.0f, -1.0f, 0.0f);
+
+//                 float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction, lightNormal));
+
+//                 vec3 bsdf;
+//                 vec3_set(bsdf,1.0f);
+
+//                 vec3_scale(bsdf, sample.diffuse, 1.0f / lm_pi);
+
+//                 float pdf = plane_pdf_independent_xz(currentSamplePoint, center, standard_deviation);
+
+//                 // theta
+//                 float last_term = costheta * cosThetaPrime / ((distance2 + 1e-6f) * pdf);
+
+//                 vec3_scale(bsdf, bsdf, last_term);
+//                 vec3_cwiseProduct(bsdf, bsdf, emission);
+
+//                 vec3_add(contribution, contribution, bsdf);
+//             }
+//         }
+//         else {
+//             // Color the pixels whose shadow rays didn't hit anything blue
+//             // std::cout << hitPoint[0] << ", " << hitPoint[1] << ", " << hitPoint[2] << std::endl;
+//             // vec3 blue = {0.f, 0.f, 100.f};
+//             // vec3_add(contribution, contribution, blue);
+//         }
+//     }
+//     vec3_scale(contribution, contribution, 1.0f/num_samples);
+//     vec3_dup(directLighting, contribution);
+// }
+
+void uniformSampleBottomFaceOriginalSDF(int num_points, vec3 *output_points, RandomState* random) {
+    for (int i = 0; i < num_points; ++i) {
+        float randomX = random_next_float(random);
+        float randomZ = random_next_float(random);
+        float sampledX = -0.5f + randomX * 1.f;
+        float sampledZ = -0.5f + randomZ * 1.f;
+        vec3 result;
+        result[0] = sampledX;
+        result[1] = -1.f;
+        result[2] = sampledZ;
+        vec3_dup(output_points[i],result);
+    }
+}
+
 void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample, const SceneParams *params, const SceneContext *ctx, vec3 directLighting, RandomState* random){
     const int num_samples = 1;
     vec3 sampled_points[num_samples];
-
     vec3 center;
     vec3_set(center, 0.0f, 1.f, 0.0f); // Center of distribution on the plane y=1.0
-    float standard_deviation = 0.2f;     // Adjust spread as needed
-
-    sample_points_on_plane(num_samples, center, standard_deviation, sampled_points, random);
-
+    //float standard_deviation = 0.2f;     // Adjust spread as needed
+    //sample_points_on_plane(num_samples, center, standard_deviation, sampled_points, random);
+    uniformSampleBottomFaceOriginalSDF(num_samples,sampled_points,random);
     vec3 contribution;
     vec3_set(contribution, 0.0f);
-
     for(int i = 0; i < num_samples; i++){
         vec3 currentSamplePoint;
-
         vec3_dup(currentSamplePoint,sampled_points[i]);
-
         vec3 light_direction;
-
         vec3_sub(light_direction, currentSamplePoint, hitPoint);
-
         float distance2 = vec3_mul_inner(light_direction, light_direction);
-
         vec3_norm(light_direction, light_direction); // point to light
+
+        ray_step(hitPoint, hitPoint, light_direction, 0.001);
 
         IntersectionResult shadow_hit_point = trace_ray_get_intersection(hitPoint, light_direction, params, ctx);
         if (!shadow_hit_point.found_intersection) {
@@ -906,60 +1030,52 @@ void computeDirectLighting(vec3 hitPoint, vec3 hitNormal, SdfResult sample, cons
         }
         if (shadow_hit_point.found_intersection) {
             const float ray_epsilon1 = 1e-4f;
-
             vec3 shadow_hit_intersection_point;
             ray_step(shadow_hit_intersection_point, hitPoint, light_direction, shadow_hit_point.intersection_t);
-
             vec3 shawdow_normal;
             get_normal_from(shawdow_normal,shadow_hit_intersection_point,params, ctx);
+
+
+            vec3_scale(shawdow_normal, shawdow_normal, -1.f); // DEBUG
+
 
             // // seems wrong...
             // vec3 offset_position;
             // vec3_scale(offset_position, shawdow_normal, ray_epsilon1);
             // vec3_add(shadow_hit_intersection_point, shadow_hit_intersection_point, offset_position);
-
             vec3 diff_hit;
             vec3_sub(diff_hit,shadow_hit_intersection_point,hitPoint);
             float hitDistance = vec3_len(diff_hit);
-
             vec3 diff_light;
             vec3_sub(diff_light,currentSamplePoint,hitPoint);
             float distToLight = vec3_len(diff_light);
-
             // std::cout << "hitDistance: " << hitDistance << std::endl;
             // std::cout << "distToLight: " << distToLight << std::endl;
             // std::cout << std::endl;
-
-            if (fabsf(hitDistance - distToLight) < 1e-4f) { // not occluded...
-
+            if (fabsf(hitDistance - distToLight) < 1e-2f) { // not occluded...
                 float costheta = fmaxf(0.f, vec3_mul_inner(light_direction,hitNormal));
-
                 vec3 emission;
-                vec3_set(emission, 15.f);
+                vec3_set(emission, 10.f);
                 vec3 lightNormal;
-                vec3_set(lightNormal, 0.0f, -1.0f, 0.0f);
-
+                vec3_set(lightNormal, 0.0f, 1.f, 0.0f);
                 float cosThetaPrime = fmax(0.0f, -vec3_mul_inner(light_direction, lightNormal));
-
                 vec3 bsdf;
                 vec3_set(bsdf,1.0f);
-
                 vec3_scale(bsdf, sample.diffuse, 1.0f / lm_pi);
-
-                float pdf = plane_pdf_independent_xz(currentSamplePoint, center, standard_deviation);
-
+                //float pdf = plane_pdf_independent_xz(currentSamplePoint, center, standard_deviation);
+                //float pdf = 1;
+                float lightArea = 1.0f * 0.8f;
+                float pdf = 1.0f / lightArea;
                 // theta
                 float last_term = costheta * cosThetaPrime / ((distance2 + 1e-6f) * pdf);
-
                 vec3_scale(bsdf, bsdf, last_term);
                 vec3_cwiseProduct(bsdf, bsdf, emission);
-
                 vec3_add(contribution, contribution, bsdf);
             }
         }
         else {
-            vec3 blue = {0.f, 0.f, 100.f};
-            vec3_add(contribution, contribution, blue);
+            // vec3 blue = {0.f, 0.f, 100.f};
+            // vec3_add(contribution, contribution, blue);
         }
     }
     vec3_scale(contribution, contribution, 1.0f/num_samples);
@@ -1219,7 +1335,7 @@ std::vector<Segment> getSecondaryPath(
 
         vec3 directLighting; // it re-declares directLighting every iteration/every bounce, is this ok?
 
-        if(iter == 0){ // this will never happen...
+        if (iter == 1) {
             vec3_set(directLighting, 0.0f);
         }
         else{
@@ -1228,10 +1344,7 @@ std::vector<Segment> getSecondaryPath(
 
             vec3 hit_normal;
             get_normal_from(hit_normal, current_position, params, ctx);
-            // TODO: current_position goes wrong here
-            // std::cout << "current_position: " << current_position[0] << ", " << current_position[1] << ", " << current_position[2] << std::endl;
             computeDirectLighting(current_position,hit_normal,hit_sample,params,ctx, directLighting,random);
-
         }
         
         vec3_dup(newSegment.contribution, directLighting);
@@ -1240,6 +1353,10 @@ std::vector<Segment> getSecondaryPath(
 
         if(random_next_float(random)> pathContinuationProb){
             break;
+        }
+
+        if (iter == 2) { // TODO DEBUG
+            return path;
         }
 
         // Find out if the ray hit

@@ -1,5 +1,5 @@
 LLVM_ENZYME=/usr/local/src/Enzyme/enzyme/build/Enzyme/LLVMEnzyme-16.so
-FLAGS=-O3 -g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion
+FLAGS=-O3 -g -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wfloat-conversion -fopenmp
 FRONTEND_FLAGS=-fsanitize=address,undefined
 LINK_FLAGS=-lm -lpthread
 

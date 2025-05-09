@@ -14,8 +14,8 @@
 #include "sim_random.h"
 
 int main(void) {
-    long image_width = 500;
-    long image_height = 500;
+    long image_width = 200;
+    long image_height = 200;
     RandomState *rng = make_random();
     SceneContext *ctx = make_scene_context();
     SceneParams *params = uninit_scene_params();
@@ -43,10 +43,10 @@ int main(void) {
         }
     };
 
-    body("debug-tracing", render_image_tracing);
-    // body("debug-phong", render_image_phong);
-    // body("debug-fd", finite_differences);
-    // body("debug-effects", render_image_effects);
+    // body("debug-tracing", render_image_tracing);
+    body("debug-phong", render_image_phong);
+    body("debug-fd", finite_differences);
+    body("debug-effects", render_image_effects);
 
     free_image(&grad_slice);
     free_image(&real);
