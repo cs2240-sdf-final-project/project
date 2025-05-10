@@ -14,8 +14,8 @@
 #include "sim_random.h"
 
 int main(void) {
-    long image_width = 200;
-    long image_height = 200;
+    long image_width = 500;
+    long image_height = 500;
     RandomState *rng = make_random();
     SceneContext *ctx = make_scene_context();
     SceneParams *params = uninit_scene_params();

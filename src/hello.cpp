@@ -116,15 +116,24 @@ void vec3_cwiseProduct(vec3 out, vec3 a, vec3 b){
     out[2] = a[2]*b[2];
 }
 
-float sdfCylinder(const vec3 pos,float radius, float height) {
+float sdfCylinder(const vec3 pos,float radius, float height, mat4x4 transf) {
+    vec4 pos_homogeneous = {pos[0], pos[1], pos[2], 1.f};
+    vec4 pos_rotated_homogeneous;
+    mat4x4_mul_vec4(pos_rotated_homogeneous, transf, pos_homogeneous);
+    vec3 pos_rotated = {
+        pos_rotated_homogeneous[0],
+        pos_rotated_homogeneous[1],
+        pos_rotated_homogeneous[2]
+    };
+
     vec2 xz;
-    xz[0] = pos[0];
-    xz[1] = pos[2];
+    xz[0] = pos_rotated[0];
+    xz[1] = pos_rotated[2];
     float xzLen = vec2_len(xz);
 
     vec2 d;
     d[0] = xzLen - radius;
-    d[1] = fabsf(pos[1]) - height;
+    d[1] = fabsf(pos_rotated[1]) - height;
 
     vec2 abs_d;
     vec2_abs(abs_d, d);
@@ -234,12 +243,22 @@ float sdfTriPrism(const vec3 origin, float h0, float h1) {
     return dist;
 }
 
-float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
+float sdfVerticalCapsule(const vec3 origin, float radius, float height, mat4x4 transf) {
     vec3 pos;
     vec3_dup(pos, origin);
-    pos[1] -= clamp(pos[1], 0.0f, height);
 
-    return vec3_len(pos) - radius;
+    vec4 pos_homogeneous = {pos[0], pos[1], pos[2], 1.f};
+    vec4 pos_rotated_homogeneous;
+    mat4x4_mul_vec4(pos_rotated_homogeneous, transf, pos_homogeneous);
+    vec3 pos_rotated = {
+        pos_rotated_homogeneous[0],
+        pos_rotated_homogeneous[1],
+        pos_rotated_homogeneous[2]
+    };
+
+    pos_rotated[1] -= clamp(pos_rotated[1], 0.0f, height);
+
+    return vec3_len(pos_rotated) - radius;
 }
 
 float sdfSphere(const vec3 pos) {
@@ -268,16 +287,47 @@ struct SceneParams {
     // Object params
     float object_capsule_pos[3];
     float object_cylinder_pos[3];
-    float color[3];
     float object_cylinder_r;
-    float object_cyliner_h;
+    float object_cylinder_h;
     float object_capsule_r;
     float object_capsule_h;
-    mat4x4 object_transf;
+    float object_cylinder_rot[3];
+    float object_capsule_rot[3];
+    float object_capsule_diffuse[3];
+    float object_capsule_specular[3];
+    float object_capsule_alpha;
+    float object_cylinder_diffuse[3];
+    float object_cylinder_specular[3];
+    float object_cylinder_alpha;
+
+    // For guy
+    float object_eye_0_pos[3];
+    float object_eye_0_r;
+    float object_eye_0_h;
+    float object_eye_0_rot[3]; // 38
+
+    float object_eye_1_pos[3];
+    float object_eye_1_r;
+    float object_eye_1_h;
+    float object_eye_1_rot[3]; // 46
+
+    float object_leg_0_pos[3];
+    float object_leg_0_r;
+    float object_leg_0_h;
+    float object_leg_0_rot[3]; // 52, 53, 54
+
+    float object_leg_1_pos[3];
+    float object_leg_1_r;
+    float object_leg_1_h;
+    float object_leg_1_rot[3];
 
     //light color
-    float light_color[3];
-    float light_direction[3];
+    float light_1_color[3];
+    float light_2_color[3];
+    float light_3_color[3];
+    float light_1_direction[3];
+    float light_2_direction[3];
+    float light_3_direction[3];
 };
 
 int number_of_scene_params = (int)(sizeof(SceneParams) / sizeof(float));
@@ -444,34 +494,132 @@ inline void compose_scene_sample(SdfResult *destination, SdfResult *b) {
 inline void object_cylinder(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)params;
     (void)ctx;
-    vec3 world = {0.5f, 0.1f, -0.1f};
+    vec3 world = {0.5f, 0.4f, -0.1f};
+    // vec3 world = {0.3f, 0.5f, -0.4f};
     vec3_add(world, world, params->object_cylinder_pos);
     vec3 local;
     vec3_sub(local, pos, world);
-    sample->distance = sdfCylinder(local, 0.2f + params->object_cylinder_r, 0.4f + params->object_cyliner_h);
-    vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
-    //vec3_set(sample->emissive, 10.f, 10.f, 10.f);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    // mat4x4_rotate_X(transf, transf, 4.f*params->object_cylinder_rot[0] + lm_pi / 3.f);
+    // mat4x4_rotate_Y(transf, transf, 4.f*params->object_cylinder_rot[1]);
+    // mat4x4_rotate_Z(transf, transf, 4.f*params->object_cylinder_rot[2] + lm_pi / 2.f);
+    sample->distance = sdfCylinder(local, 0.2f + params->object_cylinder_r, 0.6f + params->object_cylinder_h, transf);
+    // sample->distance = sdfCylinder(local, 0.2f, 0.6f, transf);
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    // vec3_add(sample->diffuse, sample->diffuse, params->object_cylinder_diffuse);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+    // vec3_add(sample->specular, sample->specular, params->object_cylinder_specular);
     //sample->isReflected = true;
+    // sample->shininess += 1.f / (params->object_cylinder_alpha + 0.0001f) - 1.f; // TODO: fix nan derivatives
 }
 inline void object_capsule(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)ctx;
-    vec3 world = {-0.3f, 0.4f, 0.7f};
+    vec3 world = {0.f, -0.2f, 0.f};
+    // vec3 world = {-0.1f, 0.3f, 0.2f};
     vec3_add(world, world, params->object_capsule_pos);
     vec3 local;
     vec3_sub(local, pos, world);
-    vec3 a = {0.3f, 0.f, 0.f};
-    vec3 b = {-0.3f, 0.f, 0.f};
-    vec3 c = {0.f, 0.3f, 0.f};
-    // sample->distance = sdfTriangle(local, a, b, c);
-    // std::cout << sample->distance << std::endl;
-    sample->distance = sdfVerticalCapsule(local, 0.4f + params->object_capsule_r, 0.6f + params->object_capsule_h);
-    vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
-    //vec3_set(sample->emissive, 0.5f, 0.5f, 0.5f);
-    vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    // mat4x4_rotate_X(transf, transf, 4.f*params->object_capsule_rot[0] - lm_pi / 4.f);
+    // mat4x4_rotate_Y(transf, transf, 4.f*params->object_capsule_rot[1]);
+    // mat4x4_rotate_Z(transf, transf, 4.f*params->object_capsule_rot[2] + lm_pi / 4.f);
+    sample->distance = sdfVerticalCapsule(local, 0.2f + params->object_capsule_r, 0.5f + params->object_capsule_h, transf);
+    // sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f, transf);
+    vec3_set(sample->diffuse, 3.f, 3.f, 0.1f);
+    vec3_set(sample->specular, 0.9f, 0.9f, 0.9f);
+    // vec3_add(sample->diffuse, sample->diffuse, params->object_capsule_diffuse);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+    // vec3_add(sample->specular, sample->specular, params->object_capsule_specular);
+    // sample->shininess += 1.f / (params->object_capsule_alpha + 0.0001f) - 1.f; // TODO: fix nan derivatives
 }
+
+inline void object_eye_0(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)ctx;
+    vec3 world = {-0.02f, -0.3f, 0.5f};
+    // vec3 world = {-0.1f, 0.3f, 0.2f};
+    vec3_add(world, world, params->object_eye_0_pos);
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    mat4x4_rotate_X(transf, transf, 4.f*params->object_eye_0_rot[0]);
+    mat4x4_rotate_Y(transf, transf, 4.f*params->object_eye_0_rot[1]);
+    mat4x4_rotate_Z(transf, transf, 4.f*params->object_eye_0_rot[2]);
+    sample->distance = sdfVerticalCapsule(local, 0.05f + params->object_eye_0_r, params->object_eye_0_h, transf);
+    // sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f, transf);
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    // vec3_add(sample->diffuse, sample->diffuse, params->object_capsule_diffuse);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+    // vec3_add(sample->specular, sample->specular, params->object_capsule_specular);
+    // sample->shininess += 1.f / (params->object_capsule_alpha + 0.0001f) - 1.f; // TODO: fix nan derivatives
+}
+
+inline void object_eye_1(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)ctx;
+    vec3 world = {0.1f, -0.3f, 0.6f};
+    // vec3 world = {-0.1f, 0.3f, 0.2f};
+    vec3_add(world, world, params->object_eye_1_pos);
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    mat4x4_rotate_X(transf, transf, 4.f*params->object_eye_1_rot[0]);
+    mat4x4_rotate_Y(transf, transf, 4.f*params->object_eye_1_rot[1]);
+    mat4x4_rotate_Z(transf, transf, 4.f*params->object_eye_1_rot[2]);
+    sample->distance = sdfVerticalCapsule(local, 0.1f + params->object_eye_1_r, params->object_eye_1_h, transf);
+    // sample->distance = sdfVerticalCapsule(local, 0.3f, 0.5f, transf);
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    // vec3_add(sample->diffuse, sample->diffuse, params->object_capsule_diffuse);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+    // vec3_add(sample->specular, sample->specular, params->object_capsule_specular);
+    // sample->shininess += 1.f / (params->object_capsule_alpha + 0.0001f) - 1.f; // TODO: fix nan derivatives
+}
+
+inline void object_leg_0(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)params;
+    (void)ctx;
+    vec3 world = {0.2f, 0.65f, 0.1f};
+    // vec3 world = {0.3f, 0.5f, -0.4f};
+    vec3_add(world, world, params->object_leg_0_pos);
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    mat4x4_rotate_X(transf, transf, 4.f*params->object_leg_0_rot[0]);
+    mat4x4_rotate_Y(transf, transf, 4.f*params->object_leg_0_rot[1]);
+    mat4x4_rotate_Z(transf, transf, 4.f*params->object_leg_0_rot[2] + lm_pi / 3.f);
+    sample->distance = sdfCylinder(local, 0.1f + params->object_leg_0_r, 0.07f + params->object_leg_0_h, transf);
+    // sample->distance = sdfCylinder(local, 0.2f, 0.6f, transf);
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+}
+inline void object_leg_1(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)params;
+    (void)ctx;
+    vec3 world = {-0.14f, 0.55f, 0.2f};
+    // vec3 world = {0.3f, 0.5f, -0.4f};
+    vec3_add(world, world, params->object_leg_1_pos);
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    mat4x4_rotate_X(transf, transf, 4.f*params->object_leg_1_rot[0] + lm_pi / 5.f);
+    mat4x4_rotate_Y(transf, transf, 4.f*params->object_leg_1_rot[1]);
+    mat4x4_rotate_Z(transf, transf, 4.f*params->object_leg_1_rot[2]);
+    sample->distance = sdfCylinder(local, 0.2f + params->object_leg_1_r, 0.07f + params->object_leg_1_h, transf);
+    // sample->distance = sdfCylinder(local, 0.2f, 0.6f, transf);
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+}
+
+
 // inline void object_triangle(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
 //     (void)ctx;
 //     vec3 world = {-0.4f, 0.3f, 0.5f};
@@ -556,12 +704,35 @@ inline __attribute__((always_inline)) void
 scene_sample(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     default_scene_sample(sample);
     SdfResult working;
-    default_scene_sample(&working);
-    object_cylinder(pos, params, ctx, &working);
-    compose_scene_sample(sample, &working);
+    // default_scene_sample(&working);
+    // object_cylinder(pos, params, ctx, &working);
+    // compose_scene_sample(sample, &working);
+
     default_scene_sample(&working);
     object_capsule(pos, params, ctx, &working);
     compose_scene_sample(sample, &working);
+
+    // // eye0
+    // default_scene_sample(&working);
+    // object_eye_0(pos, params, ctx, &working);
+    // compose_scene_sample(sample, &working);
+
+    // // eye1
+    // default_scene_sample(&working);
+    // object_eye_1(pos, params, ctx, &working);
+    // compose_scene_sample(sample, &working);
+
+    // // leg0
+    // default_scene_sample(&working);
+    // object_leg_0(pos, params, ctx, &working);
+    // compose_scene_sample(sample, &working);
+
+    // // leg1
+    // default_scene_sample(&working);
+    // object_leg_1(pos, params, ctx, &working);
+    // compose_scene_sample(sample, &working);
+    
+
     default_scene_sample(&working);
     object_backwall(pos, params, ctx, &working);
     compose_scene_sample(sample, &working);
@@ -734,11 +905,19 @@ void diff_sdf(const vec3 pos, SceneParams *paramsOut, const SceneParams *paramsI
 
 inline void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, const SdfResult *sample, const SceneParams *params) {
     float lightColors[3][3] = {
-        {.2f, .1f, .8f},
+        {.2f, .2f, .2f},
         {.2f, .2f, .2f},
         {.2f, .2f, .2f},
     };
-    vec3_add(lightColors[0], lightColors[0], params->color);
+    // float lightColors[3][3] = {
+    //     {1.f, 0.f, 0.f},
+    //     {0.f, 1.f, 0.f},
+    //     {0.f, 0.f, 1.f},
+    // };
+    // vec3_add(lightColors[0], lightColors[0], params->light_1_color);
+    // vec3_add(lightColors[1], lightColors[1], params->light_2_color);
+    // vec3_add(lightColors[2], lightColors[2], params->light_3_color);
+
     // world[0] -= params->object_3_pos[0];
 
     float lightDirections[3][3] = {
@@ -746,20 +925,29 @@ inline void phongLight(vec3 radiance, const vec3 looking, const vec3 normal, con
         {-3.f, 2.f, 0.f},
         {0.f, -1.f, 3.f},
     };
+    // float lightDirections[3][3] = {
+    //     {0.8f, -0.2f, 0.2f},
+    //     {-0.2f, 0.8f, -0.2f},
+    //     {-0.2f, -0.2f, 0.8f},
+    // };
+    // vec3_add(lightDirections[0], lightDirections[0], params->light_1_direction);
+    // vec3_add(lightDirections[1], lightDirections[1], params->light_2_direction);
+    // vec3_add(lightDirections[2], lightDirections[2], params->light_3_direction);
+
     float kd = 0.5;
     float ks = 1.0;
     vec3_dup(radiance, sample->ambient);
     for (int l = 0; l < 3; l++) {
         vec3 lightColor;
         vec3_dup(lightColor, lightColors[l]);
-        lightColor[0] += params->light_color[0];
-        lightColor[1] += params->light_color[1];
-        lightColor[2] += params->light_color[2];
+        // lightColor[0] += params->light_color[0];
+        // lightColor[1] += params->light_color[1];
+        // lightColor[2] += params->light_color[2];
         vec3 light_dir;
         vec3_norm(light_dir, lightDirections[l]);
-        light_dir[0] += params->light_direction[0];
-        light_dir[1] += params->light_direction[1];
-        light_dir[2] += params->light_direction[2];
+        // light_dir[0] += params->light_direction[0];
+        // light_dir[1] += params->light_direction[1];
+        // light_dir[2] += params->light_direction[2];
         float facing = fmaxf(0.0, vec3_mul_inner(normal, light_dir));
 
 
