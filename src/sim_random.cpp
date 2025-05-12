@@ -78,32 +78,22 @@ sample_hemisphere(vec3 out, const vec3 normal, RandomState *rng)
         vec3_scale(out, out, -1.0f);       /* mirror through the origin */
     }
 }
-////////// END CODE FROM CHATGPT
 
-// general random number with normal distribution use box muller transform
-float generate_normal_random(RandomState* random) {
-    static int has_spare = 0;
-    static float spare_value;
+void generate_normal_random(RandomState* random, float *out_1, float *out_2) {
+    float u1, u2;
+    // Ensure u1 is never exactly 0 for log()
+    do {
+        // Generate two uniform random numbers in (0, 1]
+        u1 = random_next_float(random);
+        u2 = random_next_float(random);
 
-    if (has_spare) {
-        has_spare = 0;
-        return spare_value;
-    } else {
-        float u1, u2, radius_sq;
-        // Ensure u1 is never exactly 0 for log()
-        do {
-            // Generate two uniform random numbers in (0, 1]
-            u1 = random_next_float(random);
-            u2 = random_next_float(random);
+        // Basic Box-Muller requires log(u1), ensure u1 > 0
+    } while (u1 <= 1e-9); // Avoid log(0) or very small numbers
 
-            // Basic Box-Muller requires log(u1), ensure u1 > 0
-        } while (u1 <= 1e-9); // Avoid log(0) or very small numbers
+    float radius = sqrtf(-2.0f * logf(u1));
+    float angle = 2.0f * M_PIf * u2;
 
-        float radius = sqrtf(-2.0f * logf(u1));
-        float angle = 2.0f * M_PI * u2;
-
-        has_spare = 1;
-        spare_value = radius * sinf(angle); // Store the second value
-        return radius * cosf(angle);        // Return the first value
-    }
+    *out_1 = radius * sinf(angle);
+    *out_2 = radius * cosf(angle);
 }
+////////// END CODE FROM CHATGPT
