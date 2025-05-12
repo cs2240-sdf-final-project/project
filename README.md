@@ -1,3 +1,11 @@
+# Intro
+
+Jiayi Li, Ethan Williams, Eric Chen (Team SDF: Sensational Derivative Fun) worked on this project. We had a final project presentation [with slides](https://docs.google.com/presentation/d/1ccIIOmtE-_Sr1BH-Tv8BTCCOI29Wx_p-VSmyhHoaVdA/edit?usp=sharing).
+
+We mostly implemented [A Simple Approach to Differentiable Rendering of SDFs](https://dl.acm.org/doi/full/10.1145/3680528.3687573), by Zichen Wang, Xi Deng, Ziyi Zhang, Wenzel Jakob, and Steve Marschner.
+
+![an image and some partial derivatives from our project](collage.png)
+
 # How to build and run
 
 To produce single-frame gradient and rendering results for debugging, run
@@ -6,7 +14,7 @@ To produce single-frame gradient and rendering results for debugging, run
 ./make.sh run-debug
 ```
 
-This creates the following directories:  
+This creates the following directories:
 - debug-phong: contains the phong gradients and final phong rendering
 - debug-tracing: contains the path traced gradients and final path traced rendering
 - debug-fd: contains the phong gradients obtained with finite difference method
@@ -41,4 +49,3 @@ Enzyme is a tool that autodiffs existing C code. The two most helpful pages in t
 Since we will be working with SDFs, Inigo Quilezles blog will be very helpful. There is a [page](https://iquilezles.org/articles/distfunctions/) that specifies SDFs for many 3d shapes, along with the operations needed to compose them to form more complex scenes.
 
 I have also referenced Chris Wellons blog <https://nullprogram.com> in some places where we have used his subroutines.
-
