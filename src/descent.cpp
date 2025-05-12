@@ -77,7 +77,6 @@ float total_loss(const Image *real, const Image *groundtruth, const SceneParams 
 
 void total_loss_deriv(const Image *real, Image *groundtruth, GradientImage *gradient, SceneParams *loss_deriv_out, SceneParams *scratch, const SceneParams *params) {
     scene_consistency_gradient(params, scratch);
-    scene_params_scale(scratch, scratch, 1e-2f);
     mse_loss_deriv(real, groundtruth, gradient, loss_deriv_out);
     scene_params_elementwise_add(loss_deriv_out, loss_deriv_out, scratch);
 }
@@ -111,7 +110,7 @@ int main(void) {
     SceneParams *loss_deriv = uninit_scene_params();
     SceneParams *scratch = uninit_scene_params();
 
-    const float learning_rate = 1e+0f;
+    const float learning_rate = 1e-2f;
 
     const int num_epochs = 1000;
     for (int epoch = 0; epoch < num_epochs; epoch++) {

@@ -27,14 +27,14 @@ build/render.o: build/render.2.ll
 build/render.2.ll: build/render.1.ll
 	opt-16 $^ --load-pass-plugin=$(LLVM_ENZYME) '-passes=enzyme' -o $@ -S
 
-build/render.1.ll: src/render.cpp
-	clang++-16 $^ -S -emit-llvm -o $@ $(FLAGS)
+build/render.1.ll: src/render.cpp src/scene.cpp src/scene.h src/params.h
+	clang++-16 $< -S -emit-llvm -o $@ $(FLAGS)
 
-build/sim_random.o: src/sim_random.cpp
-	clang++-16 -c $^ $(FLAGS) $(FRONTEND_FLAGS) -o $@
+build/sim_random.o: src/sim_random.cpp src/sim_random.h
+	clang++-16 -c $< $(FLAGS) $(FRONTEND_FLAGS) -o $@
 
-build/image.o: src/image.cpp
-	clang++-16 -c $^ $(FLAGS) $(FRONTEND_FLAGS) -o $@
+build/image.o: src/image.cpp src/image.h
+	clang++-16 -c $< $(FLAGS) $(FRONTEND_FLAGS) -o $@
 
 clean:
 	rm -f build/*.ll build/*.exe build/*.o

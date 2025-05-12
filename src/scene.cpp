@@ -120,22 +120,42 @@ inline float sdfPlane(const vec3 pos, const vec3 normal, float height) {
     return dist;
 }
 
-inline float sdfVerticalCapsule(const vec3 origin, float radius, float height) {
+float sdfVerticalCapsule(const vec3 origin, float radius, float height, mat4x4 transf) {
     vec3 pos;
     vec3_dup(pos, origin);
-    pos[1] -= clamp(pos[1], 0.0f, height);
-    return vec3_len(pos) - radius;
+
+    vec4 pos_homogeneous = {pos[0], pos[1], pos[2], 1.f};
+    vec4 pos_rotated_homogeneous;
+    mat4x4_mul_vec4(pos_rotated_homogeneous, transf, pos_homogeneous);
+    vec3 pos_rotated = {
+        pos_rotated_homogeneous[0],
+        pos_rotated_homogeneous[1],
+        pos_rotated_homogeneous[2]
+    };
+
+    pos_rotated[1] -= clamp(pos_rotated[1], 0.0f, height);
+
+    return vec3_len(pos_rotated) - radius;
 }
 
-inline float sdfCylinder(const vec3 pos,float radius, float height) {
+static float sdfCylinder(const vec3 pos,float radius, float height, mat4x4 transf) {
+    vec4 pos_homogeneous = {pos[0], pos[1], pos[2], 1.f};
+    vec4 pos_rotated_homogeneous;
+    mat4x4_mul_vec4(pos_rotated_homogeneous, transf, pos_homogeneous);
+    vec3 pos_rotated = {
+        pos_rotated_homogeneous[0],
+        pos_rotated_homogeneous[1],
+        pos_rotated_homogeneous[2]
+    };
+
     vec2 xz;
-    xz[0] = pos[0];
-    xz[1] = pos[2];
+    xz[0] = pos_rotated[0];
+    xz[1] = pos_rotated[2];
     float xzLen = vec2_len(xz);
 
     vec2 d;
     d[0] = xzLen - radius;
-    d[1] = fabsf(pos[1]) - height;
+    d[1] = fabsf(pos_rotated[1]) - height;
 
     vec2 abs_d;
     vec2_abs(abs_d, d);
@@ -160,7 +180,7 @@ const long grid_dim[3] = {basic_grid_dim, basic_grid_dim, basic_grid_dim};
 const long grid_strides[3] = {basic_grid_dim * basic_grid_dim, basic_grid_dim, 1};
 
 struct SceneParams {
-    float rgb[3];
+    float xyz[3];
     float grid[basic_grid_dim][basic_grid_dim][basic_grid_dim];
 };
 
@@ -345,8 +365,9 @@ void scene_params_init(SceneParams *params, const SceneContext *ctx) {
         vec3 diff;
         vec3_set(diff, 0.3f, 0.0, 0.0f);
         vec3_sub(local, pos, diff);
-
-        float ret = sdfCylinder(local, 0.7f, 0.7f );
+        mat4x4 trans;
+        mat4x4_identity(trans);
+        float ret = sdfCylinder(local, 0.7f, 0.7f, trans);
         return ret;
     });
 }
@@ -362,57 +383,7 @@ void scene_consistency_gradient(const SceneParams *params, SceneParams *gradient
     grid_consistency_loss_diff(&gradient_out->grid[0][0][0], grid_strides, grid_dim, &params->grid[0][0][0]);
 }
 
-inline float object_cylinder_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
-    (void)params;
-    (void)ctx;
-    vec3 world = {0.8f, 0.2f, -0.2f};
-    vec3 local;
-    vec3_sub(local, pos, world);
-
-    vec3 axis    = { 3.0f, 1.0f, 0.0f };          /* rotate around +Y axis    */
-    float degrees = 32.0f;                        /* how far, in degrees      */
-
-    /* ---- build quaternion ------------------------------------------------*/
-    float radians = degrees * (float)M_PI / 180.0f;
-    quat q;
-    quat_rotate(q, radians, axis);                /* q = rotation quaternion  */
-
-    /* ---- rotate the point ------------------------------------------------ */
-    vec3 rotated;
-    quat_mul_vec3(rotated, q, pos);             /* rotated = q * point      */
-    // return sdfTriPrism(rotated, 0.3f, 0.4);
-    return sdfCylinder(rotated, 0.3f, 0.8f);
-}
-inline void object_cylinder_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
-    (void)pos;
-    (void)params;
-    (void)ctx;
-    default_scene_sample(sample);
-    vec3_set(sample->diffuse, 0.4860f, 0.1310f, 0.6630f);
-    vec3_set(sample->ambient, 0.4860f, 0.1310f, 0.6630f);
-    vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
-}
-
-inline float object_capsule_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
-    (void)params;
-    (void)ctx;
-    vec3 world = {-0.4f, 0.3f, 0.5f};
-    vec3 local;
-    vec3_sub(local, pos, world);
-    return sdfVerticalCapsule(local, 0.3f, 0.5f);
-}
-
-inline void object_capsule_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
-    (void)pos;
-    (void)params;
-    (void)ctx;
-    default_scene_sample(sample);
-    vec3_set(sample->diffuse, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->ambient, 0.4860f, 0.6310f, 0.6630f);
-    vec3_set(sample->specular, 0.8f, 0.8f, 0.8f);
-}
-
-static float sdfFiniteSquare(const vec3 pos, float thickness) {
+static inline float sdfFiniteSquare(const vec3 pos, float thickness) {
     // The square is centered at (0, 1, 0) and extends from -0.5 to 0.5 in x and y.
     // It has a thickness along the z-axis.
 
@@ -428,55 +399,20 @@ static float sdfFiniteSquare(const vec3 pos, float thickness) {
     return fmaxf(fmaxf(fmaxf(distToRight, distToLeft), fmaxf(distToTop, distToBottom)), fmaxf(distToFront, distToBack));
 }
 
-static inline float object_square_sd(const vec3 pos,const SceneParams *params, const SceneContext *ctx){
-    (void)params;
-    (void)ctx;
-    return sdfFiniteSquare(pos,0.5f);
-}
-
-static inline void object_square_mat(const vec3 pos,const SceneParams *params, const SceneContext *ctx, SdfResult *sample){
-    (void)pos;
-    (void)params;
-    (void)ctx;
-    default_scene_sample(sample);
-    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
-    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
-    vec3_set(sample->specular, 0.4f);
-    vec3_set(sample->emissive, 0.9f, 0.9f, 0.9f);
-}
-
-inline float object_square_demo_sd(const vec3 pos,const SceneParams *params, const SceneContext *ctx){
-    (void)params;
-    (void)ctx;
-    vec3 squareCenter;
-    vec3_set(squareCenter,0.0f,0.8f,0.8f);
-    return sdfSquare(pos,squareCenter);
-}
-
-inline void object_square_demo_mat(const vec3 pos,const SceneParams *params, const SceneContext *ctx, SdfResult *sample){
-    (void)pos;
-    (void)params;
-    (void)ctx;
-    default_scene_sample(sample);
-    vec3_set(sample->ambient, 0.34f, 0.041f, 0.68f);
-    vec3_set(sample->diffuse, 0.34f, 0.041f, 0.68f);
-    vec3_set(sample->specular, 0.4f);
-}
-
-// Back:
 inline float object_backwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
     (void)ctx;
     vec3 plane_normal = {0.0, 0.0, 1.0};
     return sdfPlane(pos, plane_normal, 1.0f);
 }
+
 inline void object_backwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)pos;
     (void)params;
     (void)ctx;
     default_scene_sample(sample);
-    vec3_set(sample->ambient, 0.125f, 0.21f, 0.68f);
-    vec3_set(sample->diffuse, 0.225f, 0.21f, 0.68f);
+    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
+    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
 
@@ -487,6 +423,7 @@ inline float object_topwall_sd(const vec3 pos, const SceneParams *params, const 
     vec3 plane_normal = {0.0, 1.0, 0.0};
     return sdfPlane(pos, plane_normal, 1.0f);
 }
+
 inline void object_topwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)pos;
     (void)params;
@@ -504,6 +441,7 @@ inline float object_leftwall_sd(const vec3 pos, const SceneParams *params, const
     vec3 plane_normal = {1.0, 0.0, 0.0};
     return sdfPlane(pos, plane_normal, 1.0f);
 }
+
 inline void object_leftwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)pos;
     (void)params;
@@ -515,13 +453,13 @@ inline void object_leftwall_mat(const vec3 pos, const SceneParams *params, const
 }
 
 // Right:
-inline float object_rightwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+static inline float object_rightwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
     (void)ctx;
     vec3 plane_normal = {-1.0, 0.0, 0.0};
     return sdfPlane(pos, plane_normal, 1.0f);
 }
-inline void object_rightwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline void object_rightwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)pos;
     (void)params;
     (void)ctx;
@@ -532,14 +470,14 @@ inline void object_rightwall_mat(const vec3 pos, const SceneParams *params, cons
 }
 
 // Floor:
-inline float object_bottomwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+static inline float object_bottomwall_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)pos;
     (void)params;
     (void)ctx;
     vec3 plane_normal = {0.0, -1.0, 0.0};
     return sdfPlane(pos, plane_normal, 1.0f);
 }
-inline void object_bottomwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+static inline void object_bottomwall_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)pos;
     (void)params;
     (void)ctx;
@@ -548,27 +486,109 @@ inline void object_bottomwall_mat(const vec3 pos, const SceneParams *params, con
     vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
     vec3_set(sample->specular, 0.4f);
 }
-
-// Grid
-inline float object_grid_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
-    (void)ctx;
+inline float object_capsule_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     (void)params;
-    (void)pos;
-    float ret = sdfGrid(pos, grid_strides, grid_dim, &params->grid[0][0][0]);
-    // printf("%g\n", ret);
-    return ret;
-    // return INFINITY;
+    (void)ctx;
+    vec3 world = {0.f, -0.2f, 0.f};
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    mat4x4_rotate_X(transf, transf, params->xyz[0] - M_PIf / 4.f);
+    mat4x4_rotate_Y(transf, transf, params->xyz[1] - M_PIf / 4.f);
+    mat4x4_rotate_Z(transf, transf, params->xyz[2] + M_PIf / 4.f);
+    return sdfVerticalCapsule(local, 0.2f, 0.5f, transf);
 }
 
-inline void object_grid_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+inline void object_capsule_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
     (void)pos;
     (void)params;
     (void)ctx;
-    default_scene_sample(sample);
-    vec3_set(sample->ambient, 0.725f, 0.71f, 0.68f);
-    vec3_set(sample->diffuse, 0.725f, 0.71f, 0.68f);
-    vec3_add(sample->diffuse, sample->diffuse, params->rgb);
-    vec3_set(sample->specular, 0.4f);
+    vec3_set(sample->diffuse, 3.f, 3.f, 0.1f);
+    vec3_set(sample->specular, 0.9f, 0.9f, 0.9f);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+}
+
+inline float object_eye_0_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    (void)params;
+    (void)ctx;
+    vec3 world = {-0.02f, -0.3f, 0.5f};
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    return sdfVerticalCapsule(local, 0.05f, 0.0, transf);
+}
+
+inline void object_eye_0_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+}
+
+inline float object_eye_1_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    (void)params;
+    (void)ctx;
+    vec3 world = {0.1f, -0.3f, 0.6f};
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    return sdfVerticalCapsule(local, 0.1f, 0.0, transf);
+}
+
+inline void object_eye_1_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+}
+
+inline float object_leg_0_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    (void)params;
+    (void)ctx;
+    vec3 world = {0.2f, 0.65f, 0.1f};
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    mat4x4_rotate_Z(transf, transf, M_PIf / 3.f);
+    return sdfCylinder(local, 0.1f, 0.07f, transf);
+}
+
+inline void object_leg_0_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
+}
+
+inline float object_leg_1_sd(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
+    (void)params;
+    (void)ctx;
+    vec3 world = {-0.14f, 0.55f, 0.2f};
+    vec3 local;
+    vec3_sub(local, pos, world);
+    mat4x4 transf;
+    mat4x4_identity(transf);
+    mat4x4_rotate_X(transf, transf, M_PIf / 5.f);
+    return sdfCylinder(local, 0.2f, 0.07f, transf);
+}
+
+inline void object_leg_1_mat(const vec3 pos, const SceneParams *params, const SceneContext *ctx, SdfResult *sample) {
+    (void)pos;
+    (void)params;
+    (void)ctx;
+    vec3_set(sample->diffuse, 0.3f, 0.3f, 0.3f);
+    vec3_set(sample->specular, 0.5f, 0.5f, 0.5f);
+    vec3_set(sample->ambient, 0.1f, 0.1f, 0.1f);
 }
 
 extern float __enzyme_autodiff_normal(void *, int, const float *, float *, int, const SceneParams *, int, const SceneContext *ctx);
@@ -577,27 +597,33 @@ extern float __enzyme_autodiff_normal(void *, int, const float *, float *, int, 
     OBJ(object_backwall_sd,  object_backwall_mat,  __enzyme_autodiff_normal(\
         (void*)object_backwall_sd,  enzyme_dup, pos, normal,\
         enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_topwall_sd,   object_topwall_mat,   __enzyme_autodiff_normal(\
+        (void*)object_topwall_sd,   enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_leftwall_sd,  object_leftwall_mat,  __enzyme_autodiff_normal(\
+        (void*)object_leftwall_sd,  enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_rightwall_sd, object_rightwall_mat, __enzyme_autodiff_normal(\
+        (void*)object_rightwall_sd, enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_bottomwall_sd,object_bottomwall_mat,__enzyme_autodiff_normal(\
+        (void*)object_bottomwall_sd,enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
     OBJ(object_capsule_sd,   object_capsule_mat,   __enzyme_autodiff_normal(\
         (void*)object_capsule_sd,   enzyme_dup, pos, normal,\
         enzyme_const, params, enzyme_const, ctx))\
-    OBJ(object_cylinder_sd,  object_cylinder_mat,  __enzyme_autodiff_normal(\
-        (void*)object_cylinder_sd,  enzyme_dup, pos, normal,\
+    OBJ(object_eye_0_sd,      object_eye_0_mat,      __enzyme_autodiff_normal(\
+        (void*)object_eye_0_sd,      enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_eye_1_sd,      object_eye_1_mat,      __enzyme_autodiff_normal(\
+        (void*)object_eye_1_sd,      enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_leg_0_sd,      object_leg_0_mat,      __enzyme_autodiff_normal(\
+        (void*)object_leg_0_sd,      enzyme_dup, pos, normal,\
+        enzyme_const, params, enzyme_const, ctx))\
+    OBJ(object_leg_1_sd,      object_leg_1_mat,      __enzyme_autodiff_normal(\
+        (void*)object_leg_1_sd,      enzyme_dup, pos, normal,\
         enzyme_const, params, enzyme_const, ctx))
-    // OBJ(object_grid_sd,object_grid_mat,__enzyme_autodiff_normal(\
-    //     (void*)object_grid_sd,enzyme_dup, pos, normal,\
-    //     enzyme_const, params, enzyme_const, ctx))\
-    // OBJ(object_topwall_sd,   object_topwall_mat,   __enzyme_autodiff_normal(\
-    //     (void*)object_topwall_sd,   enzyme_dup, pos, normal,\
-    //     enzyme_const, params, enzyme_const, ctx))\
-    // OBJ(object_leftwall_sd,  object_leftwall_mat,  __enzyme_autodiff_normal(\
-    //     (void*)object_leftwall_sd,  enzyme_dup, pos, normal,\
-    //     enzyme_const, params, enzyme_const, ctx))\
-    // OBJ(object_rightwall_sd, object_rightwall_mat, __enzyme_autodiff_normal(\
-    //     (void*)object_rightwall_sd, enzyme_dup, pos, normal,\
-    //     enzyme_const, params, enzyme_const, ctx))\
-    // OBJ(object_bottomwall_sd,object_bottomwall_mat,__enzyme_autodiff_normal(\
-    //     (void*)object_bottomwall_sd,enzyme_dup, pos, normal,\
-    //     enzyme_const, params, enzyme_const, ctx))\
 
 inline float scene_sample_sdf(const vec3 pos, const SceneParams *params, const SceneContext *ctx) {
     float ret = INFINITY;
